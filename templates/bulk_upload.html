@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Upload Receipts - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> Bulk Upload Receipts</h5>
+                <small class="text-muted">Upload multiple receipts at once for automatic processing</small>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('bulk_upload_receipts') }}" method="post" enctype="multipart/form-data" id="bulkUploadForm">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="mb-4">
+                        <label for="files" class="form-label fw-bold">
+                            <i class="bi bi-images"></i> Select Receipt Images
+                        </label>
+                        {{ form.files(class="form-control", id="files", accept=".jpg,.jpeg,.png,.pdf") }}
+                        {% if form.files.errors %}
+                            <div class="text-danger small mt-2">{{ form.files.errors[0] }}</div>
+                        {% endif %}
+                        <div class="form-text">
+                            <i class="bi bi-info-circle"></i>
+                            Select multiple JPG, PNG, or PDF files. Hold Ctrl/Cmd to select multiple files.
+                            <br><strong>Max total size: 100MB</strong> • Individual files should be under 10MB each.
+                        </div>
+                        <div id="fileSizeWarning" class="alert alert-warning mt-2" style="display: none;">
+                            <i class="bi bi-exclamation-triangle"></i> <span id="warningText"></span>
+                        </div>
+                    </div>
+                    
+                    <div class="row" id="previewContainer" style="display: none;">
+                        <div class="col-12">
+                            <h6><i class="bi bi-eye"></i> Selected Files:</h6>
+                            <div id="filePreview" class="d-flex flex-wrap gap-2 mb-3"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <h6><i class="bi bi-robot"></i> Automatic Processing</h6>
+                        <ul class="mb-0">
+                            <li><strong>GPT-4 Vision</strong> will analyze each receipt automatically</li>
+                            <li><strong>Smart categorization</strong> based on merchant type</li>
+                            <li><strong>Auto-save</strong> receipts with complete data</li>
+                            <li><strong>Manual review</strong> required for incomplete extractions</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="alert alert-warning">
+                        <h6><i class="bi bi-exclamation-triangle"></i> Upload Limits & Cost</h6>
+                        <ul class="mb-0">
+                            <li><strong>Max total size:</strong> 100MB per upload batch</li>
+                            <li><strong>Max per file:</strong> 10MB recommended for best performance</li>
+                            <li><strong>Processing cost:</strong> ~$0.01-0.03 per receipt using GPT-4 Vision</li>
+                        </ul>
+                        <small class="text-muted">10 receipts ≈ $0.10-0.30 • 50 receipts ≈ $0.50-1.50</small>
+                    </div>
+                    
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary me-md-2">
+                            <i class="bi bi-arrow-left"></i> Back
+                        </a>
+                        {{ form.submit(class="btn btn-primary btn-lg", id="uploadBtn", disabled=True) }}
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Processing Status (hidden initially) -->
+        <div class="card mt-4" id="processingCard" style="display: none;">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-gear-fill"></i> Processing Receipts...</h6>
+            </div>
+            <div class="card-body">
+                <div class="progress mb-3">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%" id="progressBar"></div>
+                </div>
+                <div id="processingStatus">Preparing to process receipts...</div>
+            </div>
+        </div>
+        
+        <!-- Tips Card -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-lightbulb"></i> Bulk Upload Tips</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold">Best Results:</h6>
+                        <ul class="small">
+                            <li>Clear, well-lit receipt images</li>
+                            <li>Full receipt visible (no cropping)</li>
+                            <li>Straight orientation (not rotated)</li>
+                            <li>High resolution photos</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold">Auto-Categories:</h6>
+                        <ul class="small">
+                            <li><strong>Inventory:</strong> Pawn shops, estate sales, auctions</li>
+                            <li><strong>Travel:</strong> Gas stations, Uber, hotels</li>
+                            <li><strong>Meals:</strong> Restaurants, cafes</li>
+                            <li><strong>Office:</strong> Amazon, Staples, Office Depot</li>
+                        </ul>
+                        
+                        <h6 class="fw-bold mt-3">Large Batches:</h6>
+                        <ul class="small">
+                            <li>Upload 20-30 receipts at a time</li>
+                            <li>Compress images if over 10MB each</li>
+                            <li>Use JPG format for smaller file sizes</li>
+                            <li>Check your internet connection</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const fileInput = document.getElementById('files');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const previewContainer = document.getElementById('previewContainer');
+    const filePreview = document.getElementById('filePreview');
+    const bulkUploadForm = document.getElementById('bulkUploadForm');
+    const processingCard = document.getElementById('processingCard');
+    
+    fileInput.addEventListener('change', function() {
+        const files = this.files;
+        const maxTotalSize = 100 * 1024 * 1024; // 100MB
+        const maxFileSize = 10 * 1024 * 1024; // 10MB per file
+        const fileSizeWarning = document.getElementById('fileSizeWarning');
+        const warningText = document.getElementById('warningText');
+        
+        if (files.length > 0) {
+            let totalSize = 0;
+            let oversizedFiles = [];
+            
+            // Check file sizes
+            for (let i = 0; i < files.length; i++) {
+                totalSize += files[i].size;
+                if (files[i].size > maxFileSize) {
+                    oversizedFiles.push(files[i].name);
+                }
+            }
+            
+            // Check for size issues and handle warnings
+            if (totalSize > maxTotalSize) {
+                // Total size too big - block upload
+                warningText.innerHTML = `Total file size (${(totalSize / 1024 / 1024).toFixed(1)}MB) exceeds 100MB limit. Please select fewer files.`;
+                fileSizeWarning.style.display = 'block';
+                uploadBtn.disabled = true;
+                uploadBtn.innerHTML = '<i class="bi bi-x-circle"></i> Files Too Large';
+            } else {
+                // Total size is OK - enable upload
+                uploadBtn.disabled = false;
+                uploadBtn.innerHTML = `<i class="bi bi-cloud-upload"></i> Process ${files.length} Receipt${files.length > 1 ? 's' : ''} (${(totalSize / 1024 / 1024).toFixed(1)}MB)`;
+                
+                if (oversizedFiles.length > 0) {
+                    // Show warning but allow upload
+                    warningText.innerHTML = `These files are over 10MB each: ${oversizedFiles.join(', ')}. Consider compressing them for faster upload.`;
+                    fileSizeWarning.style.display = 'block';
+                } else {
+                    // No warnings needed
+                    fileSizeWarning.style.display = 'none';
+                }
+            }
+            
+            // Show preview
+            previewContainer.style.display = 'block';
+            filePreview.innerHTML = '';
+            
+            for (let i = 0; i < Math.min(files.length, 10); i++) {
+                const file = files[i];
+                const badge = document.createElement('span');
+                const isOversized = file.size > maxFileSize;
+                badge.className = isOversized ? 'badge bg-warning' : 'badge bg-secondary';
+                badge.innerHTML = `<i class="bi bi-file-image"></i> ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB)`;
+                filePreview.appendChild(badge);
+            }
+            
+            if (files.length > 10) {
+                const moreBadge = document.createElement('span');
+                moreBadge.className = 'badge bg-info';
+                moreBadge.innerHTML = `+${files.length - 10} more...`;
+                filePreview.appendChild(moreBadge);
+            }
+        } else {
+            uploadBtn.disabled = true;
+            uploadBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Upload and Process All';
+            previewContainer.style.display = 'none';
+            fileSizeWarning.style.display = 'none';
+        }
+    });
+    
+    bulkUploadForm.addEventListener('submit', function() {
+        // Show processing UI
+        processingCard.style.display = 'block';
+        uploadBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Processing...';
+        uploadBtn.disabled = true;
+        
+        // Scroll to processing card
+        processingCard.scrollIntoView({ behavior: 'smooth' });
+    });
+});
+</script>
+{% endblock %} 

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Expense Items - {{ expense[1] }} - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <!-- Expense Header -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-receipt"></i> Expense Details</h5>
+                    <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-arrow-left"></i> Back to Expenses
+                    </a>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold text-primary">{{ expense[1] }}</h6>
+                        <p class="mb-1"><strong>Amount:</strong> ${{ "%.2f"|format(expense[2]) }}</p>
+                        <p class="mb-1"><strong>Date:</strong> {{ expense[3] }}</p>
+                        <p class="mb-1"><strong>Category:</strong> 
+                            {% for cat_code, cat_name in categories %}
+                                {% if cat_code == expense[4] %}{{ cat_name }}{% endif %}
+                            {% endfor %}
+                        </p>
+                        {% if expense[5] %}
+                        <p class="mb-0"><strong>Description:</strong> {{ expense[5] }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-6">
+                        {% if expense[6] %}
+                        <div class="text-center">
+                            <h6 class="fw-bold">Receipt Image</h6>
+                            <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#receiptModal">
+                                <i class="bi bi-image"></i> View Receipt
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm ms-2 reanalyze-btn" data-expense-id="{{ expense[0] }}">
+                                <i class="bi bi-arrow-clockwise"></i> Re-analyze
+                            </button>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Individual Items -->
+        {% if items %}
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-list-ul"></i> Individual Items ({{ items|length }})</h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>SKU</th>
+                                <th>Description</th>
+                                <th class="text-end">Price</th>
+                                <th>Raw Line</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in items %}
+                            <tr>
+                                <td>
+                                    {% if item[1] %}
+                                        <code class="small">{{ item[1] }}</code>
+                                    {% else %}
+                                        <span class="text-muted">—</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <strong>{{ item[2] }}</strong>
+                                </td>
+                                <td class="text-end">
+                                    <span class="badge bg-success">${{ "%.2f"|format(item[3]) }}</span>
+                                </td>
+                                <td>
+                                    {% if item[4] %}
+                                        <small class="text-muted font-monospace">{{ item[4] }}</small>
+                                    {% else %}
+                                        <span class="text-muted">—</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot class="table-light">
+                            <tr>
+                                <th colspan="2">Total</th>
+                                <th class="text-end">
+                                    {% set total = items | sum(attribute=3) %}
+                                    <span class="badge bg-primary fs-6">${{ "%.2f"|format(total) }}</span>
+                                </th>
+                                <th></th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                
+                {% if (items | sum(attribute=3)) != expense[2] %}
+                {% set items_total = items | sum(attribute=3) %}
+                {% set difference = expense[2] - items_total %}
+                {% set tax_percentage = (difference / items_total * 100) if items_total > 0 else 0 %}
+                {% if tax_percentage > 15 or tax_percentage < -5 %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Note:</strong> The sum of individual items (${{ "%.2f"|format(items_total) }}) 
+                    differs from the total expense amount (${{ "%.2f"|format(expense[2]) }}) by ${{ "%.2f"|format(difference) }}.
+                    {% if tax_percentage > 0 and tax_percentage <= 15 %}
+                    This difference appears to be due to tax (approximately {{ "%.1f"|format(tax_percentage) }}%).
+                    {% else %}
+                    This difference is larger than typical tax rates. Please verify the amounts.
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="card">
+            <div class="card-body text-center text-muted">
+                <i class="bi bi-inbox display-1"></i>
+                <h5>No Individual Items</h5>
+                <p>No individual items were extracted from this receipt, or they weren't saved during processing.</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Receipt Image Modal -->
+{% if expense[6] %}
+<div class="modal fade" id="receiptModal" tabindex="-1" aria-labelledby="receiptModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="receiptModalLabel">Receipt Image - {{ expense[1] }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img src="{{ url_for('uploaded_file', filename=expense[6]) }}" 
+                     class="img-fluid" 
+                     alt="Receipt for {{ expense[1] }}"
+                     style="max-height: 70vh;">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a href="{{ url_for('uploaded_file', filename=expense[6]) }}" 
+                   class="btn btn-primary" 
+                   target="_blank">
+                    <i class="bi bi-download"></i> Download
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-focus on modal when shown
+document.getElementById('receiptModal')?.addEventListener('shown.bs.modal', function () {
+    this.querySelector('img').focus();
+});
+
+// Add event listener for reanalyze buttons
+document.querySelectorAll('.reanalyze-btn').forEach(button => {
+    button.addEventListener('click', function() {
+        const expenseId = this.dataset.expenseId;
+        if (!confirm('Are you sure you want to re-analyze this receipt? This will update the extracted items.')) {
+            return;
+        }
+        
+        // Show loading state
+        const originalContent = this.innerHTML;
+        this.disabled = true;
+        this.innerHTML = '<i class="bi bi-hourglass-split"></i> Analyzing...';
+        
+        fetch(`/reanalyze_receipt/${expenseId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Reload the page to show updated items
+                window.location.reload();
+            } else {
+                alert('Error re-analyzing receipt: ' + data.error);
+                this.disabled = false;
+                this.innerHTML = originalContent;
+            }
+        })
+        .catch(error => {
+            alert('Error re-analyzing receipt: ' + error);
+            this.disabled = false;
+            this.innerHTML = originalContent;
+        });
+    });
+});
+</script>
+{% endblock %} 

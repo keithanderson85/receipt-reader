@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block title %}Processing Receipt - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body text-center py-5">
+                <div class="mb-4">
+                    <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+                
+                <h4 class="mb-3">Processing Your Receipt</h4>
+                <p class="text-muted mb-4">Our AI is analyzing your receipt image...</p>
+                
+                <div class="progress mb-4" style="height: 8px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                         role="progressbar" 
+                         style="width: 0%" 
+                         id="progressBar">
+                    </div>
+                </div>
+                
+                <div id="statusText" class="text-muted">
+                    <div class="mb-2">
+                        <i class="bi bi-upload text-success"></i> File uploaded successfully
+                    </div>
+                    <div class="mb-2" id="step1">
+                        <i class="bi bi-hourglass-split text-warning"></i> Analyzing receipt with OpenAI Vision...
+                    </div>
+                    <div class="mb-2" id="step2" style="display: none;">
+                        <i class="bi bi-cpu text-info"></i> Extracting text and data...
+                    </div>
+                    <div class="mb-2" id="step3" style="display: none;">
+                        <i class="bi bi-check-circle text-success"></i> Processing complete!
+                    </div>
+                </div>
+                
+                <div class="mt-4">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> 
+                        This usually takes 5-15 seconds depending on receipt complexity
+                    </small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-lightbulb"></i> Did you know?</h6>
+            </div>
+            <div class="card-body">
+                <p class="mb-0">
+                    Our AI can read receipts from any store format, extract individual items, 
+                    calculate tax amounts, and even handle handwritten receipts. The more you use it, 
+                    the better it gets at understanding your business expenses!
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<form id="processingForm" action="{{ url_for('process_receipt_ajax') }}" method="post" style="display: none;">
+    {{ form.hidden_tag() }}
+    <input type="hidden" name="filename" value="{{ filename }}">
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let progress = 0;
+    const progressBar = document.getElementById('progressBar');
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    
+    // Simulate progress while processing
+    const progressInterval = setInterval(() => {
+        progress += Math.random() * 10;
+        if (progress > 90) progress = 90; // Don't complete until we get response
+        progressBar.style.width = progress + '%';
+    }, 500);
+    
+    // Update steps
+    setTimeout(() => {
+        step1.innerHTML = '<i class="bi bi-check-circle text-success"></i> OpenAI analysis started...';
+        step2.style.display = 'block';
+    }, 2000);
+    
+    setTimeout(() => {
+        step2.innerHTML = '<i class="bi bi-check-circle text-success"></i> Text extraction in progress...';
+    }, 4000);
+    
+    // Start processing the receipt
+    const form = document.getElementById('processingForm');
+    const formData = new FormData(form);
+    
+    fetch(form.action, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        clearInterval(progressInterval);
+        
+        if (data.success) {
+            // Complete the progress
+            progressBar.style.width = '100%';
+            step3.style.display = 'block';
+            step3.innerHTML = '<i class="bi bi-check-circle text-success"></i> Processing complete!';
+            
+            // Redirect to results after a short delay
+            setTimeout(() => {
+                window.location.href = data.redirect_url;
+            }, 1000);
+        } else {
+            // Handle error
+            const isServerError = data.error && (data.error.includes('500') || data.error.includes('server') || data.error.includes('temporarily unavailable'));
+            
+            if (isServerError) {
+                progressBar.className = 'progress-bar bg-warning';
+                progressBar.style.width = '100%';
+                step3.style.display = 'block';
+                step3.innerHTML = '<i class="bi bi-exclamation-triangle text-warning"></i> OpenAI servers are temporarily busy';
+                
+                // Show informative message about server issues
+                setTimeout(() => {
+                    const message = 'OpenAI servers are experiencing high load. Despite their status page showing operational, there are temporary server issues.\n\n' +
+                                  'Options:\n' +
+                                  '1. Try again (servers may recover)\n' +
+                                  '2. Try again in a few minutes\n' +
+                                  '3. Return to upload a different receipt\n\n' +
+                                  'Would you like to try again now?';
+                    
+                    if (confirm(message)) {
+                        location.reload();
+                    } else {
+                        window.location.href = '{{ url_for("index") }}';
+                    }
+                }, 2000);
+            } else {
+                progressBar.className = 'progress-bar bg-danger';
+                progressBar.style.width = '100%';
+                step3.style.display = 'block';
+                step3.innerHTML = '<i class="bi bi-x-circle text-danger"></i> Error: ' + data.error;
+                
+                // Show retry option
+                setTimeout(() => {
+                    if (confirm('Processing failed. Would you like to try again?')) {
+                        location.reload();
+                    } else {
+                        window.location.href = '{{ url_for("index") }}';
+                    }
+                }, 2000);
+            }
+        }
+    })
+    .catch(error => {
+        clearInterval(progressInterval);
+        console.error('Error:', error);
+        
+        progressBar.className = 'progress-bar bg-danger';
+        progressBar.style.width = '100%';
+        step3.style.display = 'block';
+        step3.innerHTML = '<i class="bi bi-x-circle text-danger"></i> Network error occurred';
+        
+        setTimeout(() => {
+            if (confirm('Network error occurred. Would you like to try again?')) {
+                location.reload();
+            } else {
+                window.location.href = '{{ url_for("index") }}';
+            }
+        }, 2000);
+    });
+});
+</script>
+{% endblock %} 

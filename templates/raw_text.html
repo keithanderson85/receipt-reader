@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Raw OCR Text - {{ filename }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Raw OCR Text Debug View</h1>
+    <p class="text-muted">File: {{ filename }}</p>
+    
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Raw OCR Text (Direct from Image)</h5>
+                </div>
+                <div class="card-body">
+                    <pre class="bg-light p-3" style="white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto;">{{ raw_text }}</pre>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Cleaned Text (For GenAI Processing)</h5>
+                </div>
+                <div class="card-body">
+                    <pre class="bg-light p-3" style="white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto;">{{ cleaned_text }}</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row mt-4">
+        <div class="col">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Image Preview</h5>
+                </div>
+                <div class="card-body text-center">
+                    <img src="{{ url_for('uploaded_file', filename=filename) }}" 
+                         class="img-fluid" 
+                         style="max-height: 500px;" 
+                         alt="Receipt Image">
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="mt-4">
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">Back to Home</a>
+    </div>
+</div>
+{% endblock %} 

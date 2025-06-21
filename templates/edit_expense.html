@@ -1,0 +1,485 @@
+{% extends "base.html" %}
+
+{% block title %}Review & Edit Expense - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    {% if editing %}
+                        <i class="bi bi-pencil-square"></i> Edit Expense
+                    {% else %}
+                        <i class="bi bi-check-square"></i> Review & Edit Expense
+                    {% endif %}
+                </h5>
+                <small class="text-muted">
+                    {% if editing %}
+                        Edit the expense information and save your changes
+                    {% else %}
+                        Please review the extracted information and make any necessary corrections
+                    {% endif %}
+                </small>
+            </div>
+            <div class="card-body">
+                <form action="{% if editing %}{{ url_for('update_expense', expense_id=expense_id) }}{% else %}{{ url_for('save_expense') }}{% endif %}" method="post" id="expenseForm">
+                    {{ form.hidden_tag() }}
+                    <input type="hidden" name="filename" value="{{ filename }}">
+                    {% if ocr_result.get('file_hash') %}
+                    <input type="hidden" name="file_hash" value="{{ ocr_result.file_hash }}">
+                    {% endif %}
+                    {% if ocr_result['items'] %}
+                    <!-- Alternative approach: individual hidden fields for each item -->
+                    {% for item in ocr_result['items'] %}
+                    <input type="hidden" name="item_{{ loop.index0 }}_sku" value="{{ item.sku or '' }}">
+                    <input type="hidden" name="item_{{ loop.index0 }}_description" value="{{ item.description or '' }}">
+                    <input type="hidden" name="item_{{ loop.index0 }}_price" value="{{ item.price or '' }}">
+                    <input type="hidden" name="item_{{ loop.index0 }}_raw_line" value="{{ item.raw_line or '' }}">
+                    {% endfor %}
+                    <input type="hidden" name="items_count" value="{{ ocr_result['items']|length }}">
+                    {% endif %}
+                    
+                    <!-- Duplicate Warning Section -->
+                    {% if ocr_result.get('duplicates') and not editing %}
+                        {% set duplicates = ocr_result.duplicates %}
+                        {% if duplicates.exact_file or duplicates.exact_match or duplicates.similar %}
+                        <div class="alert alert-warning alert-dismissible border border-warning border-2" role="alert" id="duplicateWarning" style="background-color: #fff3cd; border-left: 5px solid #ff6b35 !important;">
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="bi bi-exclamation-triangle-fill fs-4 text-danger me-2"></i>
+                                <h5 class="mb-0 text-danger">⚠️ DUPLICATE DETECTED!</h5>
+                            </div>
+                            <p class="mb-3 fw-bold">This receipt appears to already exist in your database:</p>
+                            
+                            {% if duplicates.exact_file %}
+                            <div class="mb-3">
+                                <strong>⚠️ Exact File Match:</strong>
+                                <p class="mb-1">This exact file has already been uploaded:</p>
+                                {% for dup in duplicates.exact_file %}
+                                <div class="small bg-light p-2 rounded mb-1">
+                                    <strong>{{ dup[1] }}</strong> - ${{ "%.2f"|format(dup[2]) }} on {{ dup[3] }}
+                                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" class="btn btn-sm btn-outline-primary ms-2">View</a>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            
+                            {% if duplicates.exact_match %}
+                            <div class="mb-3">
+                                <strong>🔍 Exact Receipt Match:</strong>
+                                <p class="mb-1">Found receipts with same merchant, amount, and date:</p>
+                                {% for dup in duplicates.exact_match %}
+                                <div class="small bg-light p-2 rounded mb-1">
+                                    <strong>{{ dup[1] }}</strong> - ${{ "%.2f"|format(dup[2]) }} on {{ dup[3] }}
+                                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" class="btn btn-sm btn-outline-primary ms-2">View</a>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            
+                            {% if duplicates.similar %}
+                            <div class="mb-3">
+                                <strong>🔎 Similar Receipts:</strong>
+                                <p class="mb-1">Found similar receipts (same merchant, close amount/date):</p>
+                                {% for dup in duplicates.similar %}
+                                <div class="small bg-light p-2 rounded mb-1">
+                                    <strong>{{ dup[1] }}</strong> - ${{ "%.2f"|format(dup[2]) }} on {{ dup[3] }}
+                                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" class="btn btn-sm btn-outline-primary ms-2">View</a>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            
+                            <div class="d-flex gap-2 mt-3 p-2 bg-light rounded">
+                                <button type="button" class="btn btn-warning" onclick="proceedAnyway()">
+                                    <i class="bi bi-exclamation-triangle"></i> I'm Sure - Save Anyway
+                                </button>
+                                <button type="button" class="btn btn-secondary" onclick="cancelUpload()">
+                                    <i class="bi bi-x-circle"></i> Cancel & Delete File
+                                </button>
+                                <button type="button" class="btn btn-outline-info" onclick="dismissWarning()">
+                                    <i class="bi bi-eye-slash"></i> Hide Warning
+                                </button>
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endif %}
+                    
+                    <div class="row">
+                        <!-- Form Fields -->
+                        <div class="col-lg-8">
+                            <div class="mb-3">
+                                {{ form.merchant_name.label(class="form-label fw-bold") }}
+                                {{ form.merchant_name(class="form-control", value=ocr_result['merchant_name'] if ocr_result['merchant_name'] else '') }}
+                                {% if form.merchant_name.errors %}
+                                    <div class="text-danger small">{{ form.merchant_name.errors[0] }}</div>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    {{ form.amount.label(class="form-label fw-bold") }}
+                                    <div class="input-group">
+                                        <span class="input-group-text">$</span>
+                                        {{ form.amount(class="form-control", value=ocr_result['amount'] if ocr_result['amount'] else '', step="0.01") }}
+                                    </div>
+                                    {% if form.amount.errors %}
+                                        <div class="text-danger small">{{ form.amount.errors[0] }}</div>
+                                    {% endif %}
+                                </div>
+                                
+                                <div class="col-md-6 mb-3">
+                                    {{ form.date.label(class="form-label fw-bold") }}
+                                    {{ form.date(class="form-control", value=ocr_result['date'] if ocr_result['date'] else '') }}
+                                    {% if form.date.errors %}
+                                        <div class="text-danger small">{{ form.date.errors[0] }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                {{ form.category.label(class="form-label fw-bold") }}
+                                {{ form.category(class="form-select") }}
+                                {% if form.category.errors %}
+                                    <div class="text-danger small">{{ form.category.errors[0] }}</div>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="mb-4">
+                                {{ form.description.label(class="form-label fw-bold") }}
+                                {{ form.description(class="form-control", rows="3", placeholder="Add any additional notes about this expense...") }}
+                                {% if form.description.errors %}
+                                    <div class="text-danger small">{{ form.description.errors[0] }}</div>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                <a href="{% if editing %}{{ url_for('view_expenses') }}{% else %}{{ url_for('index') }}{% endif %}" class="btn btn-outline-secondary me-md-2">
+                                    <i class="bi bi-arrow-left"></i> Cancel
+                                </a>
+                                {% if editing %}
+                                    <button type="submit" class="btn btn-success btn-lg" id="saveBtn">
+                                        <i class="bi bi-check-lg"></i> Update Expense
+                                    </button>
+                                {% else %}
+                                    {{ form.submit(class="btn btn-primary btn-lg", id="saveBtn") }}
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <!-- OCR Results Panel -->
+                        <div class="col-lg-4">
+                            <div class="card bg-light">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="mb-0"><i class="bi bi-robot"></i> OCR Results</h6>
+                                </div>
+                                <div class="card-body">
+                                    <h6 class="fw-bold text-success">
+                                        <i class="bi bi-check-circle"></i> 
+                                        {% if ocr_result.get('method') == 'gpt4_vision' %}
+                                            GPT-4 Vision Analysis Complete
+                                        {% elif ocr_result.get('method') == 'genai_text' %}
+                                            GenAI Text Processing Complete
+                                        {% elif ocr_result.get('method') == 'regex_fallback' %}
+                                            Traditional OCR Processing
+                                        {% else %}
+                                            Text Extracted Successfully
+                                        {% endif %}
+                                    </h6>
+                                    
+                                    <div class="mb-3">
+                                        <strong>Detected Information:</strong>
+                                        <ul class="list-unstyled mt-2">
+                                            <li><i class="bi bi-shop"></i> Merchant: 
+                                                <span class="fw-bold">{{ ocr_result['merchant_name'] or 'Not detected' }}</span>
+                                            </li>
+                                            <li><i class="bi bi-currency-dollar"></i> Amount: 
+                                                <span class="fw-bold">${{ "%.2f"|format(ocr_result['amount']) if ocr_result['amount'] else 'Not detected' }}</span>
+                                            </li>
+                                            <li><i class="bi bi-calendar"></i> Date: 
+                                                <span class="fw-bold">{{ ocr_result['date'] or 'Not detected' }}</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                    
+                                    {% if ocr_result['items'] and ocr_result['items']|length > 0 %}
+                                    <div class="mb-3">
+                                        <strong>Individual Items:</strong>
+                                        <div class="mt-2">
+                                            {% for item in ocr_result['items'] %}
+                                            <div class="card card-body bg-white mb-2 p-2">
+                                                <div class="d-flex justify-content-between align-items-start">
+                                                    <div>
+                                                        <div class="fw-bold text-primary">{{ item.description }}</div>
+                                                        {% if item.sku %}
+                                                        <small class="text-muted">SKU: {{ item.sku }}</small>
+                                                        {% endif %}
+                                                    </div>
+                                                    <span class="badge bg-success">${{ "%.2f"|format(item.price) }}</span>
+                                                </div>
+                                            </div>
+                                            {% endfor %}
+                                            <div class="text-center mt-2">
+                                                <small class="text-muted">{{ ocr_result['items']|length }} item(s) detected</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <div class="mb-3">
+                                        <button type="button" class="btn btn-outline-primary btn-sm w-100" data-bs-toggle="collapse" data-bs-target="#rawTextCollapse">
+                                            <i class="bi bi-eye"></i> View Raw Text
+                                        </button>
+                                        <div class="collapse mt-2" id="rawTextCollapse">
+                                            <div class="card card-body bg-white">
+                                                <small class="text-muted font-monospace">{{ ocr_result['raw_text'] }}</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <button type="button" class="btn btn-outline-secondary btn-sm w-100" data-bs-toggle="modal" data-bs-target="#receiptPreviewModal">
+                                            <i class="bi bi-image"></i> View Receipt Image
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <a href="{{ url_for('view_raw_text', filename=filename) }}" class="btn btn-outline-warning btn-sm w-100" target="_blank">
+                                            <i class="bi bi-bug"></i> Debug OCR Text
+                                        </a>
+                                    </div>
+                                    
+                                    <div class="alert alert-info small">
+                                        <i class="bi bi-info-circle"></i>
+                                        Please review the extracted information for accuracy before saving.
+                                        {% if ocr_result.get('method') %}
+                                        <br><small class="text-muted">Method: {{ ocr_result.method }}</small>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Tips Card -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-lightbulb"></i> Business Expense Tips</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold">Common Business Expenses:</h6>
+                        <ul class="small">
+                            <li>Office supplies and equipment</li>
+                            <li>Business meals (50% deductible)</li>
+                            <li>Travel and transportation</li>
+                            <li>Professional services</li>
+                            <li>Advertising and marketing</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="fw-bold">Tax Documentation:</h6>
+                        <ul class="small">
+                            <li>Keep receipts for at least 3 years</li>
+                            <li>Record business purpose in description</li>
+                            <li>Separate personal and business expenses</li>
+                            <li>Export data regularly for accounting</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Receipt Preview Modal -->
+<div class="modal fade" id="receiptPreviewModal" tabindex="-1" aria-labelledby="receiptPreviewModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="receiptPreviewModalLabel">Receipt Preview</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img src="{{ url_for('uploaded_file', filename=filename) }}" 
+                     class="img-fluid" 
+                     alt="Receipt Preview"
+                     style="max-height: 70vh;">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Smart category suggestion based on merchant name
+    const merchantInput = document.getElementById('merchant_name');
+    const categorySelect = document.getElementById('category');
+    
+    if (merchantInput && categorySelect) {
+        merchantInput.addEventListener('blur', function() {
+            const merchantName = this.value.toLowerCase();
+            
+            // Auto-suggest categories based on merchant name
+            const categoryMappings = {
+                'pawn': 'inventory',
+                'metro pawn': 'inventory',
+                'estate sale': 'inventory',
+                'garage sale': 'inventory',
+                'yard sale': 'inventory',
+                'auction': 'inventory',
+                'thrift': 'inventory',
+                'flea market': 'inventory',
+                'amazon': 'office_supplies',
+                'staples': 'office_supplies',
+                'office depot': 'office_supplies',
+                'best buy': 'equipment',
+                'target': 'office_supplies',
+                'walmart': 'office_supplies',
+                'uber': 'travel',
+                'lyft': 'travel',
+                'gas': 'travel',
+                'shell': 'travel',
+                'exxon': 'travel',
+                'restaurant': 'meals',
+                'cafe': 'meals',
+                'starbucks': 'meals',
+                'mcdonalds': 'meals',
+                'hotel': 'travel',
+                'marriott': 'travel',
+                'hilton': 'travel',
+                'fedex': 'professional_services',
+                'ups': 'professional_services'
+            };
+            
+            for (const [keyword, category] of Object.entries(categoryMappings)) {
+                if (merchantName.includes(keyword)) {
+                    categorySelect.value = category;
+                    break;
+                }
+            }
+        });
+    }
+    
+    // Form submission handling
+    document.getElementById('expenseForm').addEventListener('submit', function(e) {
+        const duplicateAlert = document.querySelector('.alert-warning');
+        const saveBtn = document.getElementById('saveBtn');
+        
+        // Check if there are duplicates and user hasn't confirmed
+        if (duplicateAlert && !duplicateAlert.hasAttribute('data-confirmed')) {
+            e.preventDefault();
+            duplicateAlert.scrollIntoView({ behavior: 'smooth' });
+            return false;
+        }
+        
+        saveBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving...';
+        saveBtn.disabled = true;
+    });
+    
+    // Function to proceed anyway with duplicate
+    window.proceedAnyway = function() {
+        const duplicateAlert = document.querySelector('.alert-warning');
+        const saveBtn = document.getElementById('saveBtn');
+        
+        if (duplicateAlert) {
+            duplicateAlert.setAttribute('data-confirmed', 'true');
+            duplicateAlert.className = 'alert alert-info';
+            duplicateAlert.innerHTML = '<i class="bi bi-info-circle"></i> <strong>Duplicate confirmed:</strong> You can now save this receipt.';
+        }
+        
+        // Re-enable the save button with different styling
+        if (saveBtn) {
+            saveBtn.className = 'btn btn-warning btn-lg';
+            saveBtn.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Save Duplicate';
+        }
+    };
+    
+    // Function to cancel upload and delete the file
+    window.cancelUpload = function() {
+        if (confirm('Are you sure you want to cancel and delete this uploaded file? This action cannot be undone.')) {
+            const filename = document.querySelector('input[name="filename"]').value;
+            
+            // Make AJAX request to delete the file
+            fetch('/delete_uploaded_file', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+                },
+                body: JSON.stringify({ filename: filename })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.href = '{{ url_for("index") }}';
+                } else {
+                    alert('Error deleting file: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                // Redirect anyway
+                window.location.href = '{{ url_for("index") }}';
+            });
+        }
+    };
+    
+    // Function to dismiss warning but keep the form
+    window.dismissWarning = function() {
+        const duplicateAlert = document.querySelector('.alert-warning');
+        if (duplicateAlert) {
+            duplicateAlert.style.display = 'none';
+        }
+        
+        // Show a small reminder
+        const reminder = document.createElement('div');
+        reminder.className = 'alert alert-secondary alert-dismissible fade show mt-2';
+        reminder.innerHTML = `
+            <small><i class="bi bi-info-circle"></i> Duplicate warning hidden. 
+            <button type="button" class="btn btn-link btn-sm p-0 ms-1" onclick="showDuplicateWarning()">Show again</button></small>
+            <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert"></button>
+        `;
+        
+        const formContainer = document.querySelector('.col-lg-8');
+        if (formContainer) {
+            formContainer.insertBefore(reminder, formContainer.firstChild);
+        }
+    };
+    
+    // Function to show duplicate warning again
+    window.showDuplicateWarning = function() {
+        const duplicateAlert = document.querySelector('.alert-warning');
+        if (duplicateAlert) {
+            duplicateAlert.style.display = 'block';
+        }
+        
+        // Remove the reminder
+        const reminder = document.querySelector('.alert-secondary');
+        if (reminder) {
+            reminder.remove();
+        }
+    };
+    
+    // Auto-format amount field
+    const amountInput = document.getElementById('amount');
+    if (amountInput) {
+        amountInput.addEventListener('blur', function() {
+            const value = parseFloat(this.value);
+            if (!isNaN(value)) {
+                this.value = value.toFixed(2);
+            }
+        });
+    }
+});
+</script>
+{% endblock %} 

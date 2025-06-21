@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Upload Results - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <!-- Summary Card -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-check-circle-fill text-success"></i> Bulk Upload Complete
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <div class="h2 text-success">{{ processed_count }}</div>
+                        <div class="text-muted">Successfully Processed</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="h2 text-warning">{{ error_count }}</div>
+                        <div class="text-muted">Need Attention</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="h2 text-info">{{ results|length }}</div>
+                        <div class="text-muted">Total Receipts</div>
+                    </div>
+                    <div class="col-md-3">
+                        {% set success_results = results|selectattr('status', 'equalto', 'success')|list %}
+                        {% set total_amount = success_results|selectattr('amount', 'defined')|sum(attribute='amount') or 0 %}
+                        <div class="h2 text-primary">${{ "%.2f"|format(total_amount) }}</div>
+                        <div class="text-muted">Total Amount</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Results Table -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="bi bi-list-check"></i> Processing Results</h6>
+                <div>
+                    <a href="{{ url_for('view_expenses') }}" class="btn btn-primary btn-sm">
+                        <i class="bi bi-eye"></i> View All Expenses
+                    </a>
+                    <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-plus"></i> Upload More
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>File</th>
+                                <th>Merchant</th>
+                                <th>Amount</th>
+                                <th>Date</th>
+                                <th>Category</th>
+                                <th>Method</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for result in results %}
+                            <tr>
+                                <td>
+                                    {% if result.status == 'success' %}
+                                        <span class="badge bg-success">
+                                            <i class="bi bi-check-circle"></i> Success
+                                        </span>
+                                    {% elif result.status == 'partial' %}
+                                        <span class="badge bg-warning">
+                                            <i class="bi bi-exclamation-triangle"></i> Partial
+                                        </span>
+                                    {% elif result.status == 'duplicate' %}
+                                        <span class="badge bg-secondary">
+                                            <i class="bi bi-files"></i> Duplicate
+                                        </span>
+                                    {% else %}
+                                        <span class="badge bg-danger">
+                                            <i class="bi bi-x-circle"></i> Error
+                                        </span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small class="text-muted">{{ result.filename or 'Unknown file' }}</small>
+                                </td>
+                                <td>
+                                    {% if (result.status == 'success' or result.status == 'partial') and result.merchant %}
+                                        <strong>{{ result.merchant }}</strong>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if (result.status == 'success' or result.status == 'partial') and result.amount is not none %}
+                                        <span class="fw-bold text-success">${{ "%.2f"|format(result.amount) }}</span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if (result.status == 'success' or result.status == 'partial') and result.date %}
+                                        {{ result.date }}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if result.status == 'success' and result.category %}
+                                        <span class="badge bg-secondary">
+                                            {% for cat_code, cat_name in [
+                                                ('inventory', 'Inventory'),
+                                                ('office_supplies', 'Office Supplies'),
+                                                ('travel', 'Travel'),
+                                                ('meals', 'Meals'),
+                                                ('equipment', 'Equipment'),
+                                                ('advertising', 'Advertising'),
+                                                ('professional_services', 'Professional'),
+                                                ('utilities', 'Utilities'),
+                                                ('rent', 'Rent'),
+                                                ('insurance', 'Insurance'),
+                                                ('other', 'Other')
+                                            ] %}
+                                                {% if cat_code == result.category %}{{ cat_name }}{% endif %}
+                                            {% endfor %}
+                                        </span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if result.get('method') %}
+                                        <small class="text-muted">
+                                            {% if result.method == 'gpt4_vision' %}
+                                                <i class="bi bi-eye text-primary"></i> Vision
+                                            {% elif result.method == 'genai_text' %}
+                                                <i class="bi bi-robot text-info"></i> GenAI
+                                            {% else %}
+                                                <i class="bi bi-gear text-secondary"></i> {{ result.method }}
+                                            {% endif %}
+                                        </small>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if result.status == 'success' %}
+                                        {% if result.get('items_count', 0) > 0 %}
+                                            <small class="text-success">{{ result.items_count }} item(s)</small>
+                                        {% else %}
+                                            <small class="text-muted">No items</small>
+                                        {% endif %}
+                                    {% elif result.status == 'partial' %}
+                                        <small class="text-warning">{{ result.get('error', 'Needs review') }}</small>
+                                    {% else %}
+                                        <small class="text-danger">{{ result.get('error', 'Processing failed') }}</small>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Next Steps -->
+        {% if error_count > 0 %}
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-lightbulb"></i> Next Steps</h6>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-warning">
+                    <h6><i class="bi bi-exclamation-triangle"></i> {{ error_count }} receipt{% if error_count != 1 %}s{% endif %} need attention</h6>
+                    <p class="mb-2">For receipts that couldn't be automatically processed:</p>
+                    <ul class="mb-0">
+                        <li>Check the image quality (clear, well-lit, full receipt visible)</li>
+                        <li>Try uploading individually for manual review</li>
+                        <li>Use the regular upload for manual correction</li>
+                    </ul>
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-plus"></i> Upload Individual Receipt
+                    </a>
+                    <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-clockwise"></i> Try Bulk Upload Again
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="card mt-4">
+            <div class="card-body text-center">
+                <h5 class="text-success"><i class="bi bi-check-circle-fill"></i> All receipts processed successfully!</h5>
+                <p class="text-muted">All receipts have been automatically categorized and saved to your expense database.</p>
+                <div class="d-flex justify-content-center gap-2">
+                    <a href="{{ url_for('view_expenses') }}" class="btn btn-primary">
+                        <i class="bi bi-eye"></i> View All Expenses
+                    </a>
+                    <a href="{{ url_for('export_expenses', format='excel') }}" class="btn btn-outline-success">
+                        <i class="bi bi-file-earmark-excel"></i> Export to Excel
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %} 
