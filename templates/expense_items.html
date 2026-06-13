@@ -60,7 +60,9 @@
                             <tr>
                                 <th>SKU</th>
                                 <th>Description</th>
+                                <th class="text-center">Qty</th>
                                 <th class="text-end">Price</th>
+                                <th class="text-end">Total</th>
                                 <th>Raw Line</th>
                             </tr>
                         </thead>
@@ -77,12 +79,18 @@
                                 <td>
                                     <strong>{{ item[2] }}</strong>
                                 </td>
+                                <td class="text-center">
+                                    <span class="badge bg-secondary">{{ item[4] or 1 }}</span>
+                                </td>
                                 <td class="text-end">
                                     <span class="badge bg-success">${{ "%.2f"|format(item[3]) }}</span>
                                 </td>
+                                <td class="text-end">
+                                    <span class="badge bg-primary">${{ "%.2f"|format(item[3] * (item[4] or 1)) }}</span>
+                                </td>
                                 <td>
-                                    {% if item[4] %}
-                                        <small class="text-muted font-monospace">{{ item[4] }}</small>
+                                    {% if item[5] %}
+                                        <small class="text-muted font-monospace">{{ item[5] }}</small>
                                     {% else %}
                                         <span class="text-muted">—</span>
                                     {% endif %}
@@ -92,9 +100,12 @@
                         </tbody>
                         <tfoot class="table-light">
                             <tr>
-                                <th colspan="2">Total</th>
+                                <th colspan="4">Total</th>
                                 <th class="text-end">
-                                    {% set total = items | sum(attribute=3) %}
+                                    {% set total = 0 %}
+                                    {% for item in items %}
+                                        {% set total = total + (item[3] * (item[4] or 1)) %}
+                                    {% endfor %}
                                     <span class="badge bg-primary fs-6">${{ "%.2f"|format(total) }}</span>
                                 </th>
                                 <th></th>
@@ -103,8 +114,11 @@
                     </table>
                 </div>
                 
-                {% if (items | sum(attribute=3)) != expense[2] %}
-                {% set items_total = items | sum(attribute=3) %}
+                {% set items_total = 0 %}
+                {% for item in items %}
+                    {% set items_total = items_total + (item[3] * (item[4] or 1)) %}
+                {% endfor %}
+                {% if items_total != expense[2] %}
                 {% set difference = expense[2] - items_total %}
                 {% set tax_percentage = (difference / items_total * 100) if items_total > 0 else 0 %}
                 {% if tax_percentage > 15 or tax_percentage < -5 %}

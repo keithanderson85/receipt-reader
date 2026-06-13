@@ -1,5 +1,5 @@
 @echo off
 cd /d %~dp0
-set PYTHONPATH=C:\Python Server\receipt_reader
-set PATH=%PATH%;C:\Python Server\receipt_reader
+set PYTHONPATH=%~dp0
+set PATH=%PATH%;%~dp0
 "C:\Users\admin\AppData\Local\Programs\Python\Python312\python.exe" -u app.py

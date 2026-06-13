@@ -1,661 +1,176 @@
 {% extends "base.html" %}
 
-{% block title %}View Expenses - Receipt Reader{% endblock %}
+{% block title %}Expenses - Receipt Reader{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-list-ul"></i> Business Expenses</h2>
+{% set total_filtered = expenses | sum(attribute=2) if expenses else 0 %}
+{% set cat_names = {
+    'inventory': 'Inventory',
+    'office_supplies': 'Office Supplies',
+    'travel': 'Travel',
+    'meals': 'Meals & Entertainment',
+    'equipment': 'Equipment',
+    'advertising': 'Advertising',
+    'professional_services': 'Professional Services',
+    'utilities': 'Utilities',
+    'rent': 'Rent',
+    'insurance': 'Insurance',
+    'other': 'Other'
+} %}
+
+<!-- Page Header -->
+<div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-3">
     <div>
-        <a href="{{ url_for('export_expenses', format='excel') }}" class="btn btn-success">
-            <i class="bi bi-file-earmark-excel"></i> Export Excel
+        <h1>Expenses</h1>
+        <p>View and manage your business expenses</p>
+    </div>
+    <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-1"></i> Add Receipts
+    </a>
+</div>
+
+<!-- Year Filter Pills -->
+<div class="year-filter">
+    <span class="year-filter-label">Filter by year:</span>
+    <a href="{{ url_for('view_expenses', category=current_category, sort=current_sort) }}" 
+       class="year-pill {% if not current_year %}active{% endif %}">All Years</a>
+    {% for year in available_years %}
+    <a href="{{ url_for('view_expenses', year=year, category=current_category, sort=current_sort) }}" 
+       class="year-pill {% if year == current_year %}active{% endif %}">{{ year }}</a>
+    {% endfor %}
+</div>
+
+<!-- Summary Bar -->
+<div class="summary-bar">
+    <div class="summary-stat">
+        <div class="summary-stat-value">{{ expenses|length }}</div>
+        <div class="summary-stat-label">Expenses</div>
+    </div>
+    <div class="summary-stat">
+        <div class="summary-stat-value">${{ "%.2f"|format(total_filtered) }}</div>
+        <div class="summary-stat-label">Total</div>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('export_expenses', format='excel', year=current_year, category=current_category, month=current_month, q=current_search) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-file-earmark-excel"></i> Excel
         </a>
-        <a href="{{ url_for('export_expenses', format='csv') }}" class="btn btn-outline-success">
-            <i class="bi bi-file-earmark-text"></i> Export CSV
+        <a href="{{ url_for('export_expenses', format='csv', year=current_year, category=current_category, month=current_month, q=current_search) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-file-earmark-text"></i> CSV
         </a>
     </div>
 </div>
 
-<!-- Filters and Sorting -->
+<!-- Filters -->
 <div class="card mb-4">
-    <div class="card-header">
-        <h6 class="mb-0"><i class="bi bi-funnel"></i> Filter & Sort Expenses</h6>
-    </div>
-    <div class="card-body">
-        <form method="GET" action="{{ url_for('view_expenses') }}" id="filterForm">
-            <div class="row g-3">
-                <div class="col-md-3">
-                    <label class="form-label">Category</label>
-                    <select name="category" class="form-select">
-                        <option value="">All Categories</option>
-                        {% for cat_code, cat_name in categories %}
-                        <option value="{{ cat_code }}" {% if cat_code == current_category %}selected{% endif %}>
-                            {{ cat_name }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">Year</label>
-                    <select name="year" class="form-select">
-                        <option value="">All Years</option>
-                        {% for year in available_years %}
-                        <option value="{{ year }}" {% if year == current_year %}selected{% endif %}>
-                            {{ year }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">Month</label>
-                    <select name="month" class="form-select">
-                        <option value="">All Months</option>
-                        {% for month_num, month_display in available_months %}
-                        <option value="{{ month_num }}" {% if month_num == current_month %}selected{% endif %}>
-                            {{ month_display }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">Sort By</label>
-                    <select name="sort" class="form-select">
-                        <option value="date_desc" {% if current_sort == 'date_desc' %}selected{% endif %}>Date (Newest)</option>
-                        <option value="date_asc" {% if current_sort == 'date_asc' %}selected{% endif %}>Date (Oldest)</option>
-                        <option value="amount_desc" {% if current_sort == 'amount_desc' %}selected{% endif %}>Amount (High)</option>
-                        <option value="amount_asc" {% if current_sort == 'amount_asc' %}selected{% endif %}>Amount (Low)</option>
-                        <option value="merchant" {% if current_sort == 'merchant' %}selected{% endif %}>Merchant A-Z</option>
-                    </select>
-                </div>
-                <div class="col-md-2 d-flex align-items-end">
-                    <div class="w-100">
-                        <button type="submit" class="btn btn-primary w-100 mb-1">
-                            <i class="bi bi-search"></i> Filter
-                        </button>
-                        <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-secondary w-100 btn-sm">
-                            <i class="bi bi-x-circle"></i> Clear
-                        </a>
-                    </div>
-                </div>
+    <div class="card-body py-3">
+        <form method="GET" action="{{ url_for('view_expenses') }}" id="filterForm" class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">Category</label>
+                <select name="category" class="form-select" onchange="this.form.submit()">
+                    <option value="">All Categories</option>
+                    {% for cat_code, cat_name in categories %}
+                    <option value="{{ cat_code }}" {% if cat_code == current_category %}selected{% endif %}>{{ cat_name }}</option>
+                    {% endfor %}
+                </select>
             </div>
+            <div class="col-md-2">
+                <label class="form-label">Sort</label>
+                <select name="sort" class="form-select" onchange="this.form.submit()">
+                    <option value="date_desc" {% if current_sort == 'date_desc' %}selected{% endif %}>Newest First</option>
+                    <option value="date_asc" {% if current_sort == 'date_asc' %}selected{% endif %}>Oldest First</option>
+                    <option value="amount_desc" {% if current_sort == 'amount_desc' %}selected{% endif %}>Highest Amount</option>
+                    <option value="amount_asc" {% if current_sort == 'amount_asc' %}selected{% endif %}>Lowest Amount</option>
+                    <option value="merchant" {% if current_sort == 'merchant' %}selected{% endif %}>Merchant A-Z</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Search</label>
+                <input type="text" class="form-control" placeholder="Merchant name..." name="q" value="{{ current_search or '' }}">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-search"></i> Search
+                </button>
+            </div>
+            <div class="col-md-2">
+                <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-secondary w-100">Clear</a>
+            </div>
+            {% if current_year %}<input type="hidden" name="year" value="{{ current_year }}">{% endif %}
         </form>
     </div>
 </div>
 
-<!-- Expenses Table -->
+<!-- Expense List -->
 {% if expenses %}
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h6 class="mb-0">
-            <i class="bi bi-table"></i> 
-            {{ expenses|length }} expense{% if expenses|length != 1 %}s{% endif %} found
-            {% if current_category or current_year or current_month %}
-                (filtered)
-            {% endif %}
-        </h6>
-        <div>
-            {% set total_filtered = expenses | sum(attribute=2) %}
-            <span class="badge bg-primary fs-6">Total: ${{ "%.2f"|format(total_filtered) }}</span>
-        </div>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover">
-                <thead>
-                    <tr>
-                        <th>Merchant</th>
-                        <th>Date</th>
-                        <th class="text-end">Amount</th>
-                        <th>Tax</th>
-                        <th>Items</th>
-                        <th class="text-center">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for expense in expenses %}
-                    <tr class="expense-row {% if expense[6] and expense[7] is none %}table-warning{% elif (expense[2]|float) != ((expense[9]|float) + (expense[7]|float)) %}table-danger{% else %}table-success{% endif %}" data-expense-id="{{ expense[0] }}">
-                        <td>
-                            <div class="d-flex flex-column">
-                                <div class="d-flex align-items-center">
-                                    {{ expense[1] }}
-                                    {% if expense[6] and expense[7] is none %}
-                                        <i class="bi bi-exclamation-triangle-fill text-warning ms-1" 
-                                           data-bs-toggle="tooltip" 
-                                           data-bs-placement="right"
-                                           title="Receipt needs to be re-analyzed for tax information"></i>
-                                    {% elif (expense[2]|float) != ((expense[9]|float) + (expense[7]|float)) %}
-                                        <i class="bi bi-exclamation-triangle-fill text-danger ms-1" 
-                                           data-bs-toggle="tooltip" 
-                                           data-bs-placement="right"
-                                           title="Totals don't match"></i>
-                                    {% else %}
-                                        <i class="bi bi-check-circle-fill text-success ms-1" 
-                                           data-bs-toggle="tooltip" 
-                                           data-bs-placement="right"
-                                           title="All information matches"></i>
-                                    {% endif %}
-                                </div>
-                                <small class="text-muted">{{ expense[4] }}</small>
-                            </div>
-                        </td>
-                        <td>
-                            <div class="d-flex flex-column">
-                                <div>{{ expense[3] }}</div>
-                                <small class="text-muted">{{ expense[8] }}</small>
-                            </div>
-                        </td>
-                        <td class="text-end">
-                            <div class="d-flex flex-column align-items-end">
-                                <div>${{ "%.2f"|format(expense[2]|float) }}</div>
-                                <small class="text-muted">Subtotal: ${{ "%.2f"|format(expense[9]|float) }}</small>
-                            </div>
-                        </td>
-                        <td>
-                            <div class="d-flex flex-column">
-                                <div>
-                                    {% if expense[7]|float > 0 %}
-                                        ${{ "%.2f"|format(expense[7]|float) }}
-                                    {% else %}
-                                        —
-                                    {% endif %}
-                                </div>
-                                <small class="text-muted">
-                                    {% if expense[8]|float > 0 %}
-                                        Rate: {{ "%.1f"|format(expense[8]|float) }}%
-                                    {% endif %}
-                                </small>
-                            </div>
-                        </td>
-                        <td>
-                            <div class="d-flex flex-column">
-                                <div>
-                                    {% if expense[5]|int > 0 %}
-                                        {{ expense[5] }} items
-                                    {% else %}
-                                        —
-                                    {% endif %}
-                                </div>
-                                <small class="text-muted">
-                                    {% if expense[10]|int > 0 %}
-                                        {{ expense[10] }} lines
-                                    {% endif %}
-                                </small>
-                            </div>
-                        </td>
-                        <td class="text-center">
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-primary view-items-btn" data-expense-id="{{ expense[0] }}">
-                                    <i class="bi bi-list"></i>
-                                </button>
-                                {% if expense[6] %}
-                                <button class="btn btn-sm btn-outline-secondary view-receipt-btn" data-expense-id="{{ expense[0] }}">
-                                    <i class="bi bi-receipt"></i>
-                                </button>
-                                {% endif %}
-                                <button class="btn btn-sm btn-outline-warning reanalyze-btn" data-expense-id="{{ expense[0] }}">
-                                    <i class="bi bi-arrow-clockwise"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                    <!-- Collapsible items row -->
-                    <tr class="items-row d-none" id="items-{{ expense[0] }}">
-                        <td colspan="6">
-                            <div class="items-container p-3 bg-light" style="border-left: 4px solid #667eea;">
-                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <h6 class="mb-0 text-primary">
-                                        <i class="bi bi-list-ul"></i> Receipt Items
-                                    </h6>
-                                    <div class="items-loading text-muted">
-                                        <i class="bi bi-hourglass-split"></i> Loading items...
-                                    </div>
-                                </div>
-                                <div class="receipt-items">
-                                    <div class="items-summary">
-                                        Items Subtotal: ${{ "%.2f"|format(expense[9]|float) }} | 
-                                        {% if expense[7]|float > 0 %}
-                                            Tax Amount: ${{ "%.2f"|format(expense[7]|float) }} | 
-                                            Total with Tax: ${{ "%.2f"|format(expense[9]|float + expense[7]|float) }} | 
-                                        {% else %}
-                                            Total: ${{ "%.2f"|format(expense[9]|float) }} | 
-                                        {% endif %}
-                                        Receipt Total: ${{ "%.2f"|format(expense[2]|float) }} | 
-                                        {% if expense[7]|float > 0 %}
-                                            {% set difference = (expense[2]|float) - ((expense[9]|float) + (expense[7]|float)) %}
-                                        {% else %}
-                                            {% set difference = (expense[2]|float) - (expense[9]|float) %}
-                                        {% endif %}
-                                        {% if difference != 0 %}
-                                            <span class="text-danger">
-                                                <i class="bi bi-exclamation-triangle-fill"></i>
-                                                Difference: ${{ "%.2f"|format(difference) }}
-                                            </span>
-                                        {% else %}
-                                            <span class="text-success">
-                                                <i class="bi bi-check-circle-fill"></i>
-                                                Difference: ${{ "%.2f"|format(difference) }}
-                                            </span>
-                                        {% endif %}
-                                    </div>
-                                    <div class="tax-info">
-                                        {% if expense[7]|float > 0 %}
-                                            <span class="text-success">
-                                                <i class="bi bi-check-circle-fill"></i>
-                                                Tax Amount: ${{ "%.2f"|format(expense[7]|float) }}
-                                            </span>
-                                        {% elif expense[6] %}  <!-- Has receipt but no tax -->
-                                            <span class="text-warning">
-                                                <i class="bi bi-exclamation-triangle-fill"></i>
-                                                No tax information found
-                                            </span>
-                                        {% endif %}
-                                    </div>
-                                    <div class="d-flex justify-content-between align-items-center mt-3">
-                                        <h6 class="mb-0">Items</h6>
-                                        <button class="btn btn-primary save-changes-btn" style="display: none;">
-                                            <i class="bi bi-save"></i> Save Changes
-                                        </button>
-                                    </div>
-                                    <table class="table table-sm">
-                                        <thead>
-                                            <tr>
-                                                <th>SKU</th>
-                                                <th>Description</th>
-                                                <th class="text-end">Price</th>
-                                                <th class="text-end">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr>
-                                                <td colspan="4" class="text-center">Loading items...</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-{% else %}
-<div class="alert alert-info">
-    <i class="bi bi-info-circle"></i> No expenses found. Try adjusting your filters or upload a new receipt.
-</div>
-{% endif %}
-
-<!-- Receipt Modals -->
-{% for expense in expenses %}
-    {% if expense[6] %}
-    <div class="modal fade" id="receiptModal{{ expense[0] }}" tabindex="-1" aria-labelledby="receiptModalLabel{{ expense[0] }}" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="receiptModalLabel{{ expense[0] }}">Receipt for {{ expense[3] }}</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body text-center">
-                    <img src="{{ url_for('uploaded_file', filename=expense[6]) }}" 
-                         class="receipt-image" 
-                         alt="Receipt"
-                         id="receiptImage{{ expense[0] }}">
-                </div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-{% endfor %}
-
-<!-- Summary Card -->
-{% if expenses %}
-<div class="card mt-4">
-    <div class="card-header">
-        <h6 class="mb-0"><i class="bi bi-bar-chart"></i> Expense Summary</h6>
-    </div>
-    <div class="card-body">
-        <div class="row">
-            <div class="col-md-6">
-                <h6 class="fw-bold">By Category:</h6>
-                {% set category_totals = {} %}
-                {% for expense in expenses %}
-                    {% set _ = category_totals.update({expense[4]: category_totals.get(expense[4], 0) + expense[2]}) %}
-                {% endfor %}
-                
-                {% for cat_code, cat_name in categories %}
-                    {% if category_totals.get(cat_code) %}
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span class="badge bg-secondary category-badge">{{ cat_name }}</span>
-                        <span class="fw-bold">${{ "%.2f"|format(category_totals[cat_code]) }}</span>
-                    </div>
+    {% for expense in expenses %}
+    <div class="expense-card" onclick="window.location='{{ url_for('edit_expense', expense_id=expense[0]) }}'">
+        <div class="d-flex justify-content-between align-items-start">
+            <div class="flex-grow-1">
+                <div class="expense-merchant">{{ expense[1] }}</div>
+                <div class="expense-meta mt-1">
+                    <span class="category-tag cat-{{ expense[4] }}">{{ cat_names.get(expense[4], expense[4]) }}</span>
+                    <span class="ms-2"><i class="bi bi-calendar3 small me-1"></i>{{ expense[3] }}</span>
+                    {% if expense[11] %}
+                    <span class="ms-2"><i class="bi bi-geo-alt small me-1"></i>{{ expense[11] }}</span>
                     {% endif %}
-                {% endfor %}
-            </div>
-            <div class="col-md-6">
-                <h6 class="fw-bold">Export Options:</h6>
-                <p class="small text-muted mb-3">
-                    Export your expenses for tax filing or accounting software. 
-                    Includes all receipts and properly categorized expenses.
-                </p>
-                <div class="d-grid gap-2">
-                    <a href="{{ url_for('export_expenses', format='excel') }}?category={{ current_category }}&year={{ current_year }}&month={{ current_month }}" 
-                       class="btn btn-success btn-sm">
-                        <i class="bi bi-file-earmark-excel"></i> Export Filtered Data to Excel
-                    </a>
-                    <a href="{{ url_for('export_expenses', format='csv') }}?category={{ current_category }}&year={{ current_year }}&month={{ current_month }}" 
-                       class="btn btn-outline-success btn-sm">
-                        <i class="bi bi-file-earmark-text"></i> Export Filtered Data to CSV
-                    </a>
+                    {% if expense[12] %}
+                    <div class="small text-muted mt-1"><i class="bi bi-house-door small me-1"></i>{{ expense[12] }}</div>
+                    {% endif %}
+                    {% if expense[5] %}
+                    <span class="ms-2 text-muted">· {{ expense[5][:40] }}{% if expense[5]|length > 40 %}...{% endif %}</span>
+                    {% endif %}
                 </div>
+            </div>
+            <div class="text-end">
+                <div class="expense-amount mb-1">${{ "%.2f"|format(expense[2]) }}</div>
+                <form action="{{ url_for('reprocess_expense', expense_id=expense[0]) }}" method="post" class="d-inline" onsubmit="return confirm('Re-run AI logic for this receipt? (Uses credits)')">
+                    <button type="submit" class="btn btn-link btn-sm p-0 text-muted opacity-50 hover-opacity-100" title="Reprocess Receipt" onclick="event.stopPropagation();">
+                        <i class="bi bi-arrow-repeat"></i> Reprocess
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-state">
+        <i class="bi bi-receipt"></i>
+        <h5>No expenses found</h5>
+        <p>{% if current_year or current_category %}Try adjusting your filters{% else %}Upload your first receipt to get started{% endif %}</p>
+    </div>
+{% endif %}
+
+<!-- Receipt Preview Modal -->
+<div class="modal fade" id="receiptModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Receipt Preview</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img src="" id="receiptImage" class="img-fluid" style="max-height:75vh;">
             </div>
         </div>
     </div>
 </div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-
-    // Handle view items button clicks
-    document.querySelectorAll('.view-items-btn').forEach(button => {
-        button.addEventListener('click', function(e) {
-            e.stopPropagation();  // Prevent row click event
-            const expenseId = this.dataset.expenseId;
-            const itemsRow = document.getElementById(`items-${expenseId}`);
-            
-            // Toggle visibility
-            itemsRow.classList.toggle('d-none');
-            
-            // If row is now visible, load items
-            if (!itemsRow.classList.contains('d-none')) {
-                loadExpenseItems(expenseId);
+    // Expense card click is handled by onclick
+    // Add keyboard accessibility
+    document.querySelectorAll('.expense-card').forEach(card => {
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                this.click();
             }
-        });
-    });
-
-    // Handle view receipt button clicks
-    document.querySelectorAll('.view-receipt-btn').forEach(button => {
-        button.addEventListener('click', function(e) {
-            e.stopPropagation();  // Prevent row click event
-            const expenseId = this.dataset.expenseId;
-            const modal = new bootstrap.Modal(document.getElementById(`receiptModal${expenseId}`));
-            modal.show();
-        });
-    });
-
-    // Handle re-analyze button clicks
-    document.querySelectorAll('.reanalyze-btn').forEach(button => {
-        button.addEventListener('click', function(e) {
-            e.stopPropagation();  // Prevent row expansion
-            const expenseId = this.dataset.expenseId;
-            const originalContent = this.innerHTML;
-            
-            // Show loading state
-            this.disabled = true;
-            this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
-            
-            // Send re-analyze request
-            fetch(`/reanalyze_receipt/${expenseId}`, {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // Show success message
-                    const toast = new bootstrap.Toast(document.getElementById('successToast'));
-                    document.getElementById('toastMessage').textContent = 'Receipt re-analyzed successfully!';
-                    toast.show();
-                    
-                    // Force reload the page
-                    window.location.href = window.location.href;
-                } else {
-                    throw new Error(data.error || 'Failed to re-analyze receipt');
-                }
-            })
-            .catch(error => {
-                console.error('Error re-analyzing receipt:', error);
-                // Show error message
-                const toast = new bootstrap.Toast(document.getElementById('errorToast'));
-                document.getElementById('errorMessage').textContent = error.message || 'Failed to re-analyze receipt';
-                toast.show();
-                
-                // Reset button
-                this.disabled = false;
-                this.innerHTML = originalContent;
-            });
         });
     });
 });
-
-// Function to load expense items
-function loadExpenseItems(expenseId) {
-    const itemsRow = document.getElementById(`items-${expenseId}`);
-    const itemsContainer = itemsRow.querySelector('.receipt-items');
-    const loadingIndicator = itemsRow.querySelector('.items-loading');
-    const saveButton = itemsContainer.querySelector('.save-changes-btn');
-    
-    // Show loading state
-    loadingIndicator.style.display = 'block';
-    itemsContainer.style.display = 'none';
-    saveButton.style.display = 'none';
-    
-    // Track edited items
-    const editedItems = new Map();
-    
-    // Fetch items from server
-    fetch(`/get_expense_items/${expenseId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                // Update items table
-                const tbody = itemsContainer.querySelector('tbody');
-                tbody.innerHTML = '';
-                
-                if (data.items && data.items.length > 0) {
-                    data.items.forEach(item => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${item.sku || '—'}</td>
-                            <td>
-                                <div class="d-flex align-items-center">
-                                    <span class="item-description">${item.description}</span>
-                                    <button class="btn btn-sm btn-link edit-description" data-item-id="${item.id}">
-                                        <i class="bi bi-pencil"></i>
-                                    </button>
-                                </div>
-                            </td>
-                            <td class="text-end">
-                                <div class="d-flex align-items-center justify-content-end">
-                                    <span class="item-price">$${item.price.toFixed(2)}</span>
-                                    <button class="btn btn-sm btn-link edit-price" data-item-id="${item.id}">
-                                        <i class="bi bi-pencil"></i>
-                                    </button>
-                                </div>
-                            </td>
-                            <td class="text-end">
-                                <button class="btn btn-sm btn-outline-danger delete-item" data-item-id="${item.id}">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-                } else {
-                    tbody.innerHTML = '<tr><td colspan="4" class="text-center">No items found</td></tr>';
-                }
-                
-                // Add event listeners for edit buttons
-                tbody.querySelectorAll('.edit-description').forEach(button => {
-                    button.addEventListener('click', function(e) {
-                        e.stopPropagation();  // Prevent row expansion
-                        const row = this.closest('tr');
-                        const descriptionCell = row.querySelector('.item-description');
-                        const currentText = descriptionCell.textContent;
-                        const itemId = this.dataset.itemId;
-                        
-                        // Create input field
-                        const input = document.createElement('input');
-                        input.type = 'text';
-                        input.className = 'form-control form-control-sm';
-                        input.value = currentText;
-                        
-                        // Replace text with input
-                        descriptionCell.innerHTML = '';
-                        descriptionCell.appendChild(input);
-                        input.focus();
-                        
-                        // Handle save
-                        input.addEventListener('blur', function() {
-                            const newValue = this.value;
-                            if (newValue !== currentText) {
-                                editedItems.set(itemId, {
-                                    ...editedItems.get(itemId),
-                                    description: newValue
-                                });
-                                saveButton.style.display = 'block';
-                            }
-                            descriptionCell.textContent = newValue;
-                        });
-                        
-                        input.addEventListener('keypress', function(e) {
-                            if (e.key === 'Enter') {
-                                this.blur();
-                            }
-                        });
-                    });
-                });
-                
-                tbody.querySelectorAll('.edit-price').forEach(button => {
-                    button.addEventListener('click', function(e) {
-                        e.stopPropagation();  // Prevent row expansion
-                        const row = this.closest('tr');
-                        const priceCell = row.querySelector('.item-price');
-                        const currentPrice = parseFloat(priceCell.textContent.replace('$', ''));
-                        const itemId = this.dataset.itemId;
-                        
-                        // Create input field
-                        const input = document.createElement('input');
-                        input.type = 'number';
-                        input.className = 'form-control form-control-sm';
-                        input.value = currentPrice.toFixed(2);
-                        input.step = '0.01';
-                        
-                        // Replace text with input
-                        priceCell.innerHTML = '';
-                        priceCell.appendChild(input);
-                        input.focus();
-                        
-                        // Handle save
-                        input.addEventListener('blur', function() {
-                            const newValue = parseFloat(this.value);
-                            if (newValue !== currentPrice) {
-                                editedItems.set(itemId, {
-                                    ...editedItems.get(itemId),
-                                    price: newValue
-                                });
-                                saveButton.style.display = 'block';
-                            }
-                            priceCell.textContent = `$${newValue.toFixed(2)}`;
-                        });
-                        
-                        input.addEventListener('keypress', function(e) {
-                            if (e.key === 'Enter') {
-                                this.blur();
-                            }
-                        });
-                    });
-                });
-                
-                tbody.querySelectorAll('.delete-item').forEach(button => {
-                    button.addEventListener('click', function(e) {
-                        e.stopPropagation();  // Prevent row expansion
-                        if (confirm('Are you sure you want to delete this item?')) {
-                            const itemId = this.dataset.itemId;
-                            editedItems.set(itemId, {
-                                ...editedItems.get(itemId),
-                                deleted: true
-                            });
-                            this.closest('tr').remove();
-                            saveButton.style.display = 'block';
-                        }
-                    });
-                });
-                
-                // Add save button click handler
-                saveButton.addEventListener('click', function(e) {
-                    e.stopPropagation();  // Prevent row expansion
-                    saveAllChanges(expenseId, editedItems);
-                });
-                
-                // Show items
-                loadingIndicator.style.display = 'none';
-                itemsContainer.style.display = 'block';
-            } else {
-                throw new Error(data.error || 'Failed to load items');
-            }
-        })
-        .catch(error => {
-            console.error('Error loading items:', error);
-            loadingIndicator.innerHTML = `<i class="bi bi-exclamation-triangle"></i> Error loading items: ${error.message}`;
-        });
-}
-
-// Function to save all changes
-function saveAllChanges(expenseId, editedItems) {
-    const saveButton = document.querySelector(`#items-${expenseId} .save-changes-btn`);
-    const originalContent = saveButton.innerHTML;
-    
-    // Show loading state
-    saveButton.disabled = true;
-    saveButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-    
-    // Convert Map to array of changes
-    const changes = Array.from(editedItems.entries()).map(([itemId, changes]) => ({
-        item_id: itemId,
-        ...changes
-    }));
-    
-    // Send changes to server
-    fetch(`/save_item_changes/${expenseId}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ changes })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            // Show success message
-            const toast = new bootstrap.Toast(document.getElementById('successToast'));
-            document.getElementById('toastMessage').textContent = 'Changes saved successfully!';
-            toast.show();
-            
-            // Force reload the page
-            window.location.href = window.location.href;
-        } else {
-            throw new Error(data.error || 'Failed to save changes');
-        }
-    })
-    .catch(error => {
-        console.error('Error saving changes:', error);
-        // Show error message
-        const toast = new bootstrap.Toast(document.getElementById('errorToast'));
-        document.getElementById('errorMessage').textContent = error.message || 'Failed to save changes';
-        toast.show();
-        
-        // Reset button
-        saveButton.disabled = false;
-        saveButton.innerHTML = originalContent;
-    });
-}
 </script>
-{% endblock %} 
+{% endblock %}

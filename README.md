@@ -234,37 +234,46 @@ gunicorn -w 4 -b 0.0.0.0:8000 app:app
 
 ### Using Docker
 
-1. **Create Dockerfile:**
-```dockerfile
-FROM python:3.9-slim
+This repository now ships with a production-ready Dockerfile, `.dockerignore`, and `docker-compose.yml`.
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-EXPOSE 5000
-
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
+1. **Configure environment:**
+   - Copy `.env.example` → `.env` (or edit your existing `.env`) with `OPENAI_API_KEY`, `SECRET_KEY`, etc.
+   - Update `.env.dev` and `.env.prod` with their own keys/secrets (defaults are placeholders).
+   - Ensure `receipts.db` exists locally so it can be mounted into the container (e.g. `touch receipts.db`).
+2. **Build & run via Compose:**
+```bash
+docker compose up --build
 ```
-
-2. **Build and run:**
+   - The app listens on `http://localhost:5000`.
+   - Volumes map `uploads/`, `bulk_reviews/`, `backups/`, and `receipts.db` so data persists across rebuilds.
+3. **One-off image run (optional):**
 ```bash
 docker build -t receipt-reader .
-docker run -p 5000:5000 -v $(pwd)/uploads:/app/uploads receipt-reader
+docker run --env-file .env -p 5000:5000 \
+  -v $(pwd)/uploads:/app/uploads \
+  -v $(pwd)/bulk_reviews:/app/bulk_reviews \
+  -v $(pwd)/backups:/app/backups \
+  -v $(pwd)/receipts.db:/app/receipts.db \
+  receipt-reader
 ```
+
+The container entrypoint automatically initializes `receipts.db` before starting Gunicorn. Poppler tools (`pdftoppm`, etc.) and OpenCV system libraries are preinstalled so PDF-to-image conversion continues to work inside the container.
+
+#### Separate dev vs prod data
+
+Run the helper script any time you want to seed the environment-specific databases from the main `receipts.db`:
+
+```bash
+python scripts/clone_db.py        # copies to env/dev/receipts.dev.db and env/prod/receipts.prod.db
+python scripts/clone_db.py --only dev   # just refresh the dev copy
+```
+
+Each Compose profile mounts its own storage directories under `env/dev` or `env/prod`, so uploads, bulk review caches, backups, and SQLite files never overlap.
+
+- **Start dev:** `docker compose --profile dev up --build` (runs on http://localhost:5100)
+- **Start prod:** `docker compose --profile prod up -d` (runs on http://localhost:5000)
+
+Stop a profile with `docker compose --profile dev down` (or `prod`). Mix and match as needed—both can run simultaneously because of separate ports and bind mounts.
 
 ## 🐛 Troubleshooting
 

@@ -1,0 +1,38 @@
+version: "3.9"
+
+x-app-base: &app-base
+  build: .
+  image: receipt-reader:latest
+  restart: unless-stopped
+
+services:
+  app-dev:
+    <<: *app-base
+    container_name: receipt-reader-dev
+    profiles: ["dev"]
+    env_file:
+      - .env.dev
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
+    ports:
+      - "5100:5000"
+    volumes:
+      - ./env/dev/uploads:/app/uploads
+      - ./env/dev/bulk_reviews:/app/bulk_reviews
+      - ./env/dev/backups:/app/backups
+      - ./env/dev/receipts.dev.db:/app/receipts.db
+
+  app-prod:
+    <<: *app-base
+    container_name: receipt-reader-prod
+    profiles: ["prod"]
+    env_file:
+      - .env.prod
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./env/prod/uploads:/app/uploads
+      - ./env/prod/bulk_reviews:/app/bulk_reviews
+      - ./env/prod/backups:/app/backups
+      - ./env/prod/receipts.prod.db:/app/receipts.db

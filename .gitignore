@@ -37,8 +37,10 @@ venv.bak/
 # Logs
 *.log
 
-# Environment variables
+# Environment variables (never commit — contain API keys and passwords)
 .env
+.env.dev
+.env.prod
 .env.local
 .env.development.local
 .env.test.local
@@ -60,4 +62,8 @@ Thumbs.db
 # Application specific
 receipts.db
 service*.log
-test_results/ 
+test_results/
+
+# Backup credentials (contain OAuth tokens — never commit)
+scripts/gdrive_credentials.json
+scripts/gdrive_token.json

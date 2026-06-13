@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+
+{% block title %}Review Bulk Upload - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-12 col-xxl-10">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0"><i class="bi bi-search"></i> Review Receipts Before Saving</h5>
+                    <small class="text-light">We flagged potential duplicates using amount + date. Decide what to keep.</small>
+                </div>
+                <span class="badge bg-light text-dark">Batch ID: {{ review_id[:8] }}…</span>
+            </div>
+            <div class="card-body">
+                <div class="row text-center g-3">
+                    <div class="col-6 col-md-3">
+                        <div class="h3 mb-1">{{ summary.total }}</div>
+                        <div class="text-muted">Total files</div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="h3 text-success mb-1">{{ summary.ready }}</div>
+                        <div class="text-muted">Ready to save</div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="h3 text-warning mb-1">{{ summary.duplicate }}</div>
+                        <div class="text-muted">Need duplicate review</div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="h3 text-danger mb-1">{{ summary.needs_data + summary.error }}</div>
+                        <div class="text-muted">Need fixes</div>
+                    </div>
+                </div>
+                <div class="alert alert-warning mt-3 mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Receipts flagged as duplicates are unchecked by default. Toggle them on if you want to keep them anyway, or remove them from the batch.
+                </div>
+            </div>
+        </div>
+
+        <form method="post" action="{{ url_for('bulk_upload_confirm') }}" id="bulkReviewForm" class="card">
+            {{ decision_form.hidden_tag() }}
+            {{ decision_form.review_id }}
+
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h6 class="mb-0"><i class="bi bi-list-task"></i> Review Queue</h6>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-secondary" type="button" id="selectReadyBtn">
+                        <i class="bi bi-check2-square"></i> Select ready items
+                    </button>
+                    <button class="btn btn-outline-secondary" type="button" id="clearSelectionsBtn">
+                        <i class="bi bi-x-circle"></i> Clear selections
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="reviewTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 50px;">Keep</th>
+                                <th>File</th>
+                                <th>Merchant</th>
+                                <th>Amount</th>
+                                <th>Date</th>
+                                <th>Status</th>
+                                <th>Issues / Notes</th>
+                                <th style="width: 120px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in entries %}
+                            {% set disabled = not entry.can_save %}
+                            {% set is_duplicate = entry.status == 'duplicate' %}
+                            <tr data-row-id="{{ entry.id }}" class="{% if is_duplicate %}table-warning{% elif entry.status == 'needs_data' %}table-info{% elif entry.status == 'error' %}table-danger{% endif %}">
+                                <td>
+                                    {% if not disabled %}
+                                        <div class="form-check">
+                                            <input class="form-check-input entry-checkbox" type="checkbox" name="selected_entries" value="{{ entry.id }}" {% if entry.status == 'ready' %}checked{% endif %} {% if is_duplicate %}data-duplicate="1"{% endif %}>
+                                        </div>
+                                    {% else %}
+                                        <i class="bi bi-dash-lg text-muted" title="Cannot auto-save"></i>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="fw-semibold">{{ entry.original_filename }}</div>
+                                    <small class="text-muted">{{ entry.method|capitalize }}</small>
+                                </td>
+                                <td>
+                                    {% if entry.merchant_name %}
+                                        <div class="fw-semibold">{{ entry.merchant_name }}</div>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Missing</span>
+                                    {% endif %}
+                                    {% if entry.detected_merchant and entry.detected_merchant != entry.merchant_name %}
+                                        <small class="text-muted d-block">Detected: {{ entry.detected_merchant }}</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if entry.amount is not none %}
+                                        ${{ "%.2f"|format(entry.amount) }}
+                                    {% else %}
+                                        <span class="text-muted">--</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ entry.date or '--' }}</td>
+                                <td>
+                                    {% if entry.status == 'ready' %}
+                                        <span class="badge bg-success"><i class="bi bi-check-circle"></i> Ready</span>
+                                    {% elif entry.status == 'duplicate' %}
+                                        <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-circle"></i> Duplicate?</span>
+                                    {% elif entry.status == 'needs_data' %}
+                                        <span class="badge bg-info text-dark"><i class="bi bi-pencil"></i> Needs info</span>
+                                    {% else %}
+                                        <span class="badge bg-danger"><i class="bi bi-x-circle"></i> Error</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if entry.issues %}
+                                        <ul class="mb-1 ps-3 small">
+                                            {% for issue in entry.issues %}
+                                                <li>{{ issue }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% else %}
+                                        <small class="text-muted">No issues detected</small>
+                                    {% endif %}
+                                    {% if entry.duplicate_examples %}
+                                        <details class="small">
+                                            <summary class="text-warning">Show existing matches</summary>
+                                            <ul class="mb-0 ps-3">
+                                                {% for dup in entry.duplicate_examples %}
+                                                    <li>
+                                                        <a href="{{ url_for('edit_expense', expense_id=dup.id) }}" target="_blank">
+                                                            {{ dup.merchant_name }} — ${{ "%.2f"|format(dup.amount) }} ({{ dup.date }})
+                                                        </a>
+                                                    </li>
+                                                {% endfor %}
+                                            </ul>
+                                        </details>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="d-flex flex-column gap-1">
+                                        <button class="btn btn-sm btn-outline-primary edit-entry-btn" type="button" 
+                                                data-entry-id="{{ entry.id }}"
+                                                data-merchant="{{ entry.merchant_name }}"
+                                                data-amount="{{ entry.amount }}"
+                                                data-date="{{ entry.date }}"
+                                                data-category="{{ entry.category }}"
+                                                data-address="{{ entry.address }}">
+                                            <i class="bi bi-pencil"></i> Edit
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger remove-entry-btn" type="button" data-entry="{{ entry.id }}">
+                                            <i class="bi bi-trash"></i> Remove
+                                        </button>
+                                        {% if entry.receipt_filename %}
+                                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('uploaded_file', filename=entry.receipt_filename) }}" target="_blank">
+                                            <i class="bi bi-image"></i> View
+                                        </a>
+                                        {% endif %}
+                                    </div>
+                                    <!-- Hidden fields for edited data -->
+                                    <input type="hidden" name="merchant_{{ entry.id }}" id="merchant_{{ entry.id }}" value="{{ entry.merchant_name }}">
+                                    <input type="hidden" name="amount_{{ entry.id }}" id="amount_{{ entry.id }}" value="{{ entry.amount }}">
+                                    <input type="hidden" name="date_{{ entry.id }}" id="date_{{ entry.id }}" value="{{ entry.date }}">
+                                    <input type="hidden" name="category_{{ entry.id }}" id="category_{{ entry.id }}" value="{{ entry.category }}">
+                                    <input type="hidden" name="address_{{ entry.id }}" id="address_{{ entry.id }}" value="{{ entry.address }}">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer d-flex flex-wrap gap-2 justify-content-between align-items-center">
+                <div class="text-muted small">
+                    <i class="bi bi-info-circle"></i> Only selected rows will be saved. Removed rows are deleted from disk immediately after confirmation.
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-secondary" type="submit" name="cancel_batch" value="1">
+                        <i class="bi bi-x-octagon"></i> Discard Entire Batch
+                    </button>
+                    <a class="btn btn-outline-dark" href="{{ url_for('bulk_upload_page') }}">
+                        <i class="bi bi-arrow-left"></i> Back to uploader
+                    </a>
+                    <button class="btn btn-primary" type="submit">
+                        <i class="bi bi-cloud-download"></i> Save selected receipts
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Multi-Receipt Modal -->
+<div class="modal fade" id="editEntryModal" tabindex="-1" aria-labelledby="editEntryModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editEntryModalLabel">Adjust Receipt Data</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="modalEntryId">
+                
+                {% if locations %}
+                <div class="mb-3">
+                    <label class="form-label fw-bold small text-primary uppercase"><i class="bi bi-magic"></i> Quick Store Selector</label>
+                    <select class="form-select form-select-sm border-primary-subtle bg-primary-subtle bg-opacity-10" id="modalQuickLocationSelect">
+                        <option value="">-- Choose a saved store --</option>
+                        {% for loc in locations %}
+                        <option value="{{ loop.index0 }}" data-name="{{ loc.name }}" data-address="{{ loc.address }}" data-category="{{ loc.category }}">
+                            {{ loc.name }} ({{ loc.address[:30] }}{% if loc.address|length > 30 %}...{% endif %})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+
+                <div class="mb-3">
+                    <label class="form-label">Merchant Name</label>
+                    <input type="text" class="form-control" id="modalMerchant">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Address</label>
+                    <input type="text" class="form-control" id="modalAddress">
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Amount</label>
+                        <input type="number" step="0.01" class="form-control" id="modalAmount">
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Date</label>
+                        <input type="date" class="form-control" id="modalDate">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Category</label>
+                    <select class="form-select" id="modalCategory">
+                        {% for cat_val, cat_label in categories %}
+                        <option value="{{ cat_val }}">{{ cat_label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveModalBtn">Apply Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('bulkReviewForm');
+    const selectReadyBtn = document.getElementById('selectReadyBtn');
+    const clearSelectionsBtn = document.getElementById('clearSelectionsBtn');
+    const checkboxes = () => Array.from(document.querySelectorAll('.entry-checkbox'));
+
+    selectReadyBtn?.addEventListener('click', () => {
+        checkboxes().forEach(cb => {
+            if (!cb.closest('tr')?.classList.contains('table-danger')) {
+                cb.checked = cb.closest('tr')?.classList.contains('table-warning') ? false : true;
+            }
+        });
+    });
+
+    clearSelectionsBtn?.addEventListener('click', () => {
+        checkboxes().forEach(cb => cb.checked = false);
+    });
+
+    // Handle Edit Modal
+    const editModal = new bootstrap.Modal(document.getElementById('editEntryModal'));
+    const modalEntryId = document.getElementById('modalEntryId');
+    const modalMerchant = document.getElementById('modalMerchant');
+    const modalAddress = document.getElementById('modalAddress');
+    const modalAmount = document.getElementById('modalAmount');
+    const modalDate = document.getElementById('modalDate');
+    const modalCategory = document.getElementById('modalCategory');
+    const modalQuickSelect = document.getElementById('modalQuickLocationSelect');
+    const saveModalBtn = document.getElementById('saveModalBtn');
+
+    document.querySelectorAll('.edit-entry-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const id = this.dataset.entryId;
+            // Get current values from hidden fields (which might have been edited already)
+            modalEntryId.value = id;
+            modalMerchant.value = document.getElementById(`merchant_${id}`).value;
+            modalAddress.value = document.getElementById(`address_${id}`).value;
+            modalAmount.value = document.getElementById(`amount_${id}`).value;
+            modalDate.value = document.getElementById(`date_${id}`).value;
+            modalCategory.value = document.getElementById(`category_${id}`).value;
+            if (modalQuickSelect) modalQuickSelect.value = "";
+            editModal.show();
+        });
+    });
+
+    modalQuickSelect?.addEventListener('change', function() {
+        const option = this.options[this.selectedIndex];
+        if (option.value !== "") {
+            modalMerchant.value = option.dataset.name || "";
+            modalAddress.value = option.dataset.address || "";
+            if (option.dataset.category) {
+                modalCategory.value = option.dataset.category;
+            }
+        }
+    });
+
+    saveModalBtn.addEventListener('click', () => {
+        const id = modalEntryId.value;
+        const merchant = modalMerchant.value;
+        const address = modalAddress.value;
+        const amount = modalAmount.value;
+        const date = modalDate.value;
+        const category = modalCategory.value;
+
+        // Update hidden fields
+        document.getElementById(`merchant_${id}`).value = merchant;
+        document.getElementById(`address_${id}`).value = address;
+        document.getElementById(`amount_${id}`).value = amount;
+        document.getElementById(`date_${id}`).value = date;
+        document.getElementById(`category_${id}`).value = category;
+
+        // Update table UI
+        const row = document.querySelector(`tr[data-row-id="${id}"]`);
+        if (row) {
+            // Update Merchant cell
+            const merchantCell = row.cells[2];
+            merchantCell.innerHTML = `
+                <div class="fw-semibold">${merchant}</div>
+                <small class="text-muted d-block">Manual adjustment</small>
+            `;
+            // Update Amount cell
+            const amountCell = row.cells[3];
+            amountCell.textContent = amount ? `$${parseFloat(amount).toFixed(2)}` : '--';
+            // Update Date cell
+            const dateCell = row.cells[4];
+            dateCell.textContent = date || '--';
+
+            // If it was "needs info" or "error", maybe change status?
+            if (merchant && amount && date) {
+                row.className = ""; // clear alert classes
+                const statusCell = row.cells[5];
+                statusCell.innerHTML = '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Ready (Adjusted)</span>';
+                
+                // Ensure checkbox is enabled if it was disabled
+                const checkbox = row.querySelector('.entry-checkbox');
+                if (!checkbox) {
+                    const cbCell = row.cells[0];
+                    cbCell.innerHTML = `
+                        <div class="form-check">
+                            <input class="form-check-input entry-checkbox" type="checkbox" name="selected_entries" value="${id}" checked>
+                        </div>
+                    `;
+                } else {
+                    checkbox.checked = true;
+                    checkbox.disabled = false;
+                }
+            }
+        }
+
+        editModal.hide();
+    });
+
+    document.querySelectorAll('.remove-entry-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const entryId = btn.dataset.entry;
+            if (!entryId) return;
+            const row = document.querySelector(`[data-row-id="${entryId}"]`);
+            if (!row) return;
+            row.classList.add('table-danger');
+            row.classList.remove('table-warning');
+            const checkbox = row.querySelector('.entry-checkbox');
+            if (checkbox) {
+                checkbox.checked = false;
+                checkbox.disabled = true;
+            }
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'removed_entries';
+            hidden.value = entryId;
+            form.appendChild(hidden);
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-trash"></i> Removed';
+        });
+    });
+});
+</script>
+{% endblock %}

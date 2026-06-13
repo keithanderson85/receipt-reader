@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Locations - Receipt Reader{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+    <div>
+        <h1 class="mb-1">Known Locations</h1>
+        <p class="text-secondary">Manage addresses for automatic matching and categorization</p>
+    </div>
+    <div class="d-flex gap-2">
+        <form action="{{ url_for('reprocess_all_locations') }}" method="post" onsubmit="return confirm('This will scan all your existing receipts. If an address matches one of these locations, the receipt will be renamed to match. Proceed?')">
+            <button type="submit" class="btn btn-outline-primary">
+                <i class="bi bi-arrow-repeat me-1"></i> Reprocess & Rename All
+            </button>
+        </form>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLocationModal">
+            <i class="bi bi-plus-lg me-1"></i> Add Location
+        </button>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="bg-light">
+                    <tr>
+                        <th class="ps-3">Name</th>
+                        <th>Address</th>
+                        <th>Default Category</th>
+                        <th class="text-end pe-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if locations %}
+                        {% for loc in locations %}
+                        <tr>
+                            <td class="ps-3 fw-bold">{{ loc[1] }}</td>
+                            <td><small class="text-muted">{{ loc[2] }}</small></td>
+                            <td>
+                                {% if loc[3] %}
+                                    <span class="category-tag cat-{{ loc[3] }}">{{ loc[3]|replace('_', ' ')|title }}</span>
+                                {% else %}
+                                    <span class="text-muted small">None</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end pe-3">
+                                <form action="{{ url_for('delete_location', location_id=loc[0]) }}" method="post" class="d-inline" onsubmit="return confirm('Delete this location?')">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="4" class="text-center py-5 text-muted">
+                                <i class="bi bi-geo-alt d-block mb-2" style="font-size: 2rem; opacity: 0.3;"></i>
+                                <p>No locations saved yet. Add one to start auto-matching!</p>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Add Location Modal -->
+<div class="modal fade" id="addLocationModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add New Location</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form action="{{ url_for('add_location') }}" method="post">
+                <div class="modal-body">
+                    {{ form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ form.name.label(class="form-label") }}
+                        {{ form.name(class="form-control", placeholder="e.g. Reno Warehouse") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.address.label(class="form-label") }}
+                        {{ form.address(class="form-control", placeholder="123 Main St, Reno, NV 89501") }}
+                        <div class="form-text small">Copy-paste the exact address from a past receipt for best matching.</div>
+                    </div>
+                    <div class="mb-3">
+                        {{ form.category.label(class="form-label") }}
+                        {{ form.category(class="form-select") }}
+                        <div class="form-text small">Expenses at this location will automatically use this category.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    {{ form.submit(class="btn btn-primary") }}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

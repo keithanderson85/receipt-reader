@@ -4,6 +4,7 @@ import json
 import os
 import base64
 import time
+import io
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -19,6 +20,15 @@ except ImportError:
     OPENAI_AVAILABLE = False
     logger.warning("OpenAI not available. Install with: pip install openai")
 
+# Import PDF processing
+try:
+    from pdf2image import convert_from_path
+    from PIL import Image
+    PDF_PROCESSING_AVAILABLE = True
+except ImportError:
+    PDF_PROCESSING_AVAILABLE = False
+    logger.warning("PDF processing not available. Install with: pip install pdf2image pillow")
+
 class ReceiptOCRGenAI:
     def __init__(self, openai_api_key: Optional[str] = None):
         """Initialize the GenAI client."""
@@ -33,6 +43,51 @@ class ReceiptOCRGenAI:
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {e}")
             self.openai_client = None
+
+    def convert_pdf_to_image(self, pdf_path: str) -> str:
+        """Convert PDF to image and return the path to the permanent image file."""
+        if not PDF_PROCESSING_AVAILABLE:
+            raise ImportError("PDF processing not available. Install with: pip install pdf2image pillow")
+            
+        try:
+            logger.info(f"Converting PDF to image: {pdf_path}")
+            
+            # On Windows, try to add poppler to PATH if it exists locally
+            poppler_path = None
+            if os.name == 'nt':  # Windows
+                # Look for local poppler installation
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                local_poppler = os.path.join(current_dir, 'poppler', 'poppler-24.08.0', 'Library', 'bin')
+                if os.path.exists(local_poppler):
+                    poppler_path = local_poppler
+                    logger.info(f"Found local poppler at: {poppler_path}")
+            
+            # Convert PDF to images (only first page for receipts)
+            if poppler_path:
+                images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=300, poppler_path=poppler_path)
+            else:
+                images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=300)
+            
+            if not images:
+                raise ValueError("No pages found in PDF")
+                
+            # Use the first page
+            image = images[0]
+            
+            # Create permanent image file (replace .pdf with .jpg)
+            temp_dir = os.path.dirname(pdf_path)
+            base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+            image_path = os.path.join(temp_dir, f"{base_name}.jpg")
+            
+            # Save as JPEG
+            image.save(image_path, 'JPEG', quality=95)
+            logger.info(f"PDF converted to permanent image: {image_path}")
+            
+            return image_path
+            
+        except Exception as e:
+            logger.error(f"Failed to convert PDF to image: {e}")
+            raise
 
     def encode_image_to_base64(self, image_path: str) -> str:
         """Encode image to base64 for GPT-4 Vision."""
@@ -62,21 +117,21 @@ class ReceiptOCRGenAI:
             logger.error(f"Failed to encode image: {e}")
             raise
 
-    def call_openai_with_retry(self, messages: List[Dict], model: str = "gpt-4o-mini", max_retries: int = 3) -> Optional[str]:
+    def call_openai_with_retry(self, messages: List[Dict], model: str = "gpt-4o-mini", max_retries: int = 3, max_tokens: int = 1500) -> Optional[str]:
         """Call OpenAI API with exponential backoff retry logic."""
         if not self.openai_client:
             raise Exception("OpenAI client not initialized")
-            
+
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
                 logger.info(f"OpenAI API attempt {attempt + 1}/{max_retries}")
-                
+
                 response = self.openai_client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    max_tokens=1500,
+                    max_tokens=max_tokens,
                     temperature=0.1
                 )
                 
@@ -151,103 +206,310 @@ class ReceiptOCRGenAI:
             logger.error(error_msg)
             return self.create_fallback_result(image_path, error_msg)
 
+        # Check if file is a PDF and convert it to image
+        converted_image_path = None
+        processing_path = image_path
+        is_pdf = False
+        
         try:
-            # Encode image to base64
-            base64_image = self.encode_image_to_base64(image_path)
-            
-            # Get file extension to determine MIME type
             file_ext = os.path.splitext(image_path)[1].lower()
+            if file_ext == '.pdf':
+                logger.info("PDF file detected, converting to image...")
+                is_pdf = True
+                converted_image_path = self.convert_pdf_to_image(image_path)
+                processing_path = converted_image_path
+                logger.info(f"Using converted image: {processing_path}")
+
+            # Encode image to base64
+            base64_image = self.encode_image_to_base64(processing_path)
+            
+            # Get file extension to determine MIME type (use processing path for converted PDFs)
+            file_ext = os.path.splitext(processing_path)[1].lower()
             if file_ext in ['.jpg', '.jpeg']:
                 mime_type = "image/jpeg"
             elif file_ext == '.png':
                 mime_type = "image/png"
+            elif file_ext == '.gif':
+                mime_type = "image/gif"
+            elif file_ext == '.webp':
+                mime_type = "image/webp"
             else:
                 mime_type = "image/jpeg"  # Default
             
             logger.info(f"Using MIME type: {mime_type} for file extension: {file_ext}")
-            
-            # Use a clear prompt for JSON extraction
-            prompt = (
-                "Analyze this receipt image and extract the following information in JSON format: "
-                '{\n'
-                '  "merchant_name": "Name of the store/business",\n'
-                '  "amount": total amount as a number (e.g., 42.99),\n'
-                '  "date": date in YYYY-MM-DD format,\n'
-                '  "subtotal": subtotal before tax as a number,\n'
-                '  "tax_amount": tax amount as a number,\n'
-                '  "tax_rate": tax rate as a percentage (e.g., 8.5),\n'
-                '  "items": [\n'
-                '    {\n'
-                '      "description": "Item description",\n'
-                '      "price": price as a number,\n'
-                '      "quantity": quantity as a number (if available)\n'
-                '    }\n'
-                '  ]\n'
-                '}\n'
-                "Only include fields you can confidently identify. If a field is unclear, omit it. "
-                "Ensure all monetary values are numbers, not strings. "
-                "Look for tax information in the receipt, including subtotal, tax amount, and tax rate. "
-                "If tax information is not clearly shown, omit those fields."
-            )
 
+            # Prepare the message for GPT-4 Vision
+            logger.info("Preparing OpenAI Vision API request...")
+            
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}}
+                        {
+                            "type": "text",
+                            "text": """Analyze this receipt image and extract the following information in JSON format:
+
+{
+    "merchant_name": "name of the business/store",
+    "address": "full street address of the store (e.g., '123 Main St, Reno, NV 89501')",
+    "location": "city and state of the store (e.g., 'Reno, NV' or 'Sparks, NV')",
+    "amount": "total amount as a number (e.g., 15.99)",
+    "date": "transaction date in YYYY-MM-DD format",
+    "items": [
+        {
+            "description": "item description",
+            "price": "item price as number",
+            "quantity": "quantity as integer (default 1)",
+            "sku": "item code/sku if visible",
+            "discount": "discount applied to this item as a number (0 if none)"
+        }
+    ],
+    "tax_amount": "tax amount as number (0 if no tax)",
+    "tax_rate": "tax rate as percentage (null if unknown)",
+    "subtotal": "subtotal before tax as number",
+    "discount_amount": "total coupon or discount amount as number (0 if none)",
+    "extra_discount": "any additional receipt-level discount or promo not already in items (0 if none)"
+}
+
+Important guidelines:
+1. Extract ALL items from the receipt with accurate prices
+2. If quantity is mentioned, extract it correctly (e.g., "2 x $5.00" means quantity 2, price $5.00 each)
+3. Calculate subtotal as sum of (price × quantity) for all items
+4. Tax amount should be the actual tax charged, not calculated
+5. For thrift stores or tax-exempt purchases, tax_amount should be 0
+6. Ensure total = subtotal + tax_amount
+7. Use exact text from receipt for descriptions
+8. If no SKU/barcode visible, leave sku as null
+9. When an item line begins with a number followed by the description (e.g., "6  Women's Clothing"), treat that number as the item quantity.
+10. Return valid JSON only, no additional text"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}",
+                                "detail": "high"
+                            }
+                        }
                     ]
                 }
             ]
 
-            # Call OpenAI with retry logic
-            response_text = self.call_openai_with_retry(messages)
-            
-            logger.info(f"OpenAI API raw response text: {response_text}")
+            logger.info("Sending request to OpenAI Vision API...")
+            raw_response = self.call_openai_with_retry(messages, model="gpt-4o-mini", max_tokens=2000)
 
-            # Try to parse JSON from the response
+            logger.info("Received response from OpenAI Vision API")
+            response_text = (raw_response or '').strip()
+            logger.info(f"Raw response: {response_text[:500]}...")  # Log first 500 chars
+
+            # Try to extract JSON from the response
             try:
-                # Extract JSON from Markdown code block if present
-                import re
-                match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', response_text)
-                if match:
-                    json_str = match.group(1)
+                # Find JSON in the response
+                start_idx = response_text.find('{')
+                end_idx = response_text.rfind('}') + 1
+                
+                if start_idx != -1 and end_idx > start_idx:
+                    json_str = response_text[start_idx:end_idx]
+                    parsed_data = json.loads(json_str)
+                    logger.info("Successfully parsed JSON response")
                 else:
-                    json_str = response_text.strip()
-                result = json.loads(json_str)
-                result['raw_text'] = response_text
-                result['success'] = True
-                result['method'] = 'gpt4_vision'
-                logger.info("✅ Receipt processed successfully with OpenAI")
-                return result
-            except Exception as e:
-                logger.error(f"Failed to parse JSON from OpenAI response: {e}")
-                return {
-                    'raw_text': response_text,
-                    'merchant_name': None,
-                    'amount': None,
-                    'date': None,
-                    'items': [],
-                    'success': False,
-                    'error': 'Could not parse JSON from OpenAI response',
-                    'method': 'gpt4_vision'
-                }
+                    raise ValueError("No JSON found in response")
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"Failed to parse JSON: {e}")
+                logger.error(f"Raw response: {response_text}")
+                # Return a fallback result
+                return self.create_fallback_result(image_path, f"JSON parsing failed: {str(e)}")
+
+            # Validate and process the extracted data
+            # Infer quantity if missing or 1 but subtotal suggests multiple units
+            items_list = parsed_data.get('items', [])
+            if (
+                items_list
+                and len(items_list) == 1
+                and items_list[0].get('quantity', 1) == 1
+                and parsed_data.get('subtotal')
+            ):
+                try:
+                    price = float(items_list[0].get('price'))
+                    subtotal_val = float(parsed_data.get('subtotal'))
+                    qty_guess = round(subtotal_val / price)
+                    if qty_guess > 1 and abs((price * qty_guess) - subtotal_val) < 0.02:
+                        items_list[0]['quantity'] = qty_guess
+                except Exception:
+                    pass
+
+            # Calculate discount from items if provided
+            item_level_discount = 0.0
+            for it in items_list:
+                try:
+                    item_level_discount += float(it.get('discount', 0) or 0)
+                except (ValueError, TypeError):
+                    pass
+
+            # Add extra receipt discount
+            extra_discount_val = float(parsed_data.get('extra_discount', 0) or 0)
+            item_level_discount += extra_discount_val
+
+            result = {
+                'raw_text': response_text,
+                'merchant_name': parsed_data.get('merchant_name', ''),
+                'address': parsed_data.get('address', ''),
+                'location': parsed_data.get('location', ''),
+                'amount': parsed_data.get('amount'),
+                'date': parsed_data.get('date'),
+                'items': items_list,
+                'tax_amount': parsed_data.get('tax_amount', 0),
+                'tax_rate': parsed_data.get('tax_rate'),
+                'discount_amount': parsed_data.get('discount_amount', 0) or item_level_discount,
+                'subtotal': parsed_data.get('subtotal'),
+                'success': True,
+                'method': 'gpt4_vision_pdf' if is_pdf else 'gpt4_vision',
+                'original_filename': os.path.basename(image_path) if is_pdf else None,
+                'converted_filename': os.path.basename(processing_path) if is_pdf else None
+            }
+
+            # Convert date string to date object if possible
+            if result['date']:
+                try:
+                    result['date'] = datetime.strptime(result['date'], '%Y-%m-%d').date()
+                except ValueError:
+                    # Try alternative formats
+                    for fmt in ['%m/%d/%Y', '%d/%m/%Y', '%Y/%m/%d']:
+                        try:
+                            result['date'] = datetime.strptime(result['date'], fmt).date()
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        result['date'] = datetime.now().date()
+
+            # If we converted a PDF, clean up the original PDF file and update the filename
+            if is_pdf and converted_image_path:
+                # Clean up the original PDF file
+                try:
+                    os.remove(image_path)
+                    logger.info(f"Cleaned up original PDF file: {image_path}")
+                except OSError as e:
+                    logger.warning(f"Could not remove PDF file {image_path}: {e}")
+                
+                # Update the result to indicate we should save the image filename, not PDF
+                result['processed_filename'] = os.path.basename(converted_image_path)
+
+            # Heuristic: if discount_amount is 0 but raw response contains coupon/discount value, try to extract
+            if (result['discount_amount'] in [None, 0]) and item_level_discount > 0:
+                result['discount_amount'] = item_level_discount
+
+            # ensure discount positive number
+            if result['discount_amount'] and result['discount_amount'] < 0:
+                result['discount_amount'] = abs(result['discount_amount'])
+
+            # Heuristic regex fallback
+            if not result['discount_amount']:
+                # Look for patterns like "Coupon Savings: -$0.81" or "Savings: $1.23"
+                coupon_match = re.search(r'(?i)(coupon|discount|savings)[^\d]*(?:-|\$)(\d+\.\d{2})', response_text)
+                if coupon_match:
+                    try:
+                        result['discount_amount'] = float(coupon_match.group(2))
+                    except ValueError:
+                        pass
+
+            # Derive discount from totals if still zero and all parts present
+            if (result.get('subtotal') is not None) and (result.get('amount') is not None):
+                try:
+                    derived_discount = (result['subtotal'] + (result['tax_amount'] or 0)) - result['amount']
+                    if derived_discount > (result['discount_amount'] or 0) + 0.009:
+                        result['discount_amount'] = round(derived_discount, 2)
+                except Exception:
+                    pass
+
+            # --- Begin unit-price adjustment heuristic ---
+            try:
+                # Approximate gross total (subtotal + discounts + tax) to gauge scale
+                gross_total = 0.0
+                try:
+                    gross_total = float(result.get('amount') or 0) \
+                                 + float(result.get('discount_amount') or 0) \
+                                 + float(result.get('tax_amount') or 0)
+                except Exception:
+                    pass
+
+                items_fixed = False
+                for it in result.get('items', []):
+                    try:
+                        qty = int(it.get('quantity', 1) or 1)
+                        price_val = float(it.get('price')) if it.get('price') is not None else None
+                        if price_val is None or qty <= 1:
+                            continue  # Nothing to fix
+
+                        # Two complementary checks:
+                        #   1. For small/medium receipts, if (price × qty) exceeds ~90% of the gross total, it is suspicious.
+                        #   2. For bigger receipts, keep the original 1.3× guard.
+                        suspicious_large_fraction = gross_total > 0 and (price_val * qty) > gross_total * 0.9
+                        suspicious_large_multiple = gross_total > 0 and (price_val * qty) > gross_total * 1.3
+
+                        if suspicious_large_fraction or suspicious_large_multiple:
+                            new_unit_price = round(price_val / qty, 2)
+                            logger.info(
+                                f"Adjusting price for '{it.get('description', '')}' from {price_val} to {new_unit_price} "
+                                f"based on quantity {qty} and gross_total {gross_total}")
+                            it['price'] = new_unit_price
+                            items_fixed = True
+                    except Exception:
+                        # Skip any item that fails numeric conversion
+                        continue
+
+                # Re-compute subtotal if any adjustments were made
+                if items_fixed:
+                    try:
+                        result['subtotal'] = round(
+                            sum(float(item.get('price', 0)) * int(item.get('quantity', 1)) for item in result['items']), 2
+                        )
+                        # Re-derive discount based on new subtotal
+                        if result.get('amount') is not None:
+                            new_derived_discount = (result['subtotal'] + (result.get('tax_amount') or 0)) - result['amount']
+                            if new_derived_discount >= 0:
+                                result['discount_amount'] = round(new_derived_discount, 2)
+                    except Exception:
+                        pass
+            except Exception as _e:
+                logger.warning(f"Unit-price adjustment heuristic failed: {_e}")
+            # --- End unit-price adjustment heuristic ---
+
+            # --- Final consistency check: align discount with subtotal, tax, and total amount ---
+            try:
+                if (result.get('subtotal') is not None) and (result.get('amount') is not None):
+                    expected_discount = round(
+                        (result['subtotal'] + (result.get('tax_amount') or 0)) - result['amount'], 2
+                    )
+
+                    # Discount should not be negative
+                    if expected_discount < 0:
+                        expected_discount = 0.0
+
+                    current_discount = round(float(result.get('discount_amount') or 0), 2)
+
+                    # If current discount differs significantly (>5¢) from expected, correct it.
+                    if abs(expected_discount - current_discount) > 0.05:
+                        logger.info(
+                            f"Adjusting discount_amount for consistency from {current_discount} to {expected_discount}"
+                        )
+                        result['discount_amount'] = expected_discount
+            except Exception as _e:
+                logger.warning(f"Consistency check failed: {_e}")
+
+            logger.info(f"Processing complete. Success: {result['success']}")
+            return result
+
         except Exception as e:
-            logger.error(f"GPT-4 Vision processing failed: {e}")
+            logger.error(f"Error processing receipt: {e}")
+            import traceback
+            traceback.print_exc()
             
-            # Check if it's a server error and provide appropriate fallback
-            error_str = str(e)
-            if "500" in error_str or "Internal Server Error" in error_str:
-                logger.warning("🔄 OpenAI servers are experiencing issues, providing fallback result")
-                return self.create_fallback_result(image_path, "OpenAI servers are temporarily experiencing issues")
-            else:
-                return {
-                    'raw_text': '',
-                    'merchant_name': 'Unknown Merchant',
-                    'amount': None,
-                    'date': datetime.now().date(),
-                    'items': [],
-                    'success': False,
-                    'error': str(e),
-                    'method': 'error'
-                } 
+            # Clean up converted image if there was an error
+            if converted_image_path and os.path.exists(converted_image_path):
+                try:
+                    os.remove(converted_image_path)
+                except OSError:
+                    pass
+            
+            return self.create_fallback_result(image_path, str(e)) 

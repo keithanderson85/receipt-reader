@@ -1,218 +1,302 @@
 {% extends "base.html" %}
 
+{% block title %}Dashboard - Receipt Reader{% endblock %}
+
 {% block content %}
-<div class="row">
-    <!-- Upload Section -->
-    <div class="col-lg-6 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> Upload Receipt</h5>
-            </div>
-            <div class="card-body">
-                <form action="{{ url_for('upload_receipt') }}" method="post" enctype="multipart/form-data" id="uploadForm">
-                    {{ form.hidden_tag() }}
-                    
-                    <div class="upload-area" onclick="document.getElementById('file').click()">
-                        <i class="bi bi-cloud-upload fs-1 text-primary mb-3"></i>
-                        <h6>Click to upload or drag and drop</h6>
-                        <p class="text-muted">Supported formats: JPG, PNG, PDF</p>
-                        <p class="text-muted" id="fileName" style="font-weight: bold;"></p>
-                    </div>
-                    
-                    {{ form.file(class="d-none", id="file") }}
-                    
-                    <div class="d-grid gap-2 mt-3">
-                        {{ form.submit(class="btn btn-primary btn-lg") }}
-                        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-outline-primary">
-                            <i class="bi bi-cloud-upload"></i> Bulk Upload Multiple Receipts
-                        </a>
-                    </div>
-                </form>
-                
-                <hr class="my-4">
-                
-                <div class="text-center">
-                    <h6 class="text-muted">How it works:</h6>
-                    <div class="row text-center mt-3">
-                        <div class="col-4">
-                            <i class="bi bi-upload text-primary fs-4"></i>
-                            <p class="small mt-2">Upload receipt</p>
-                        </div>
-                        <div class="col-4">
-                            <i class="bi bi-cpu text-primary fs-4"></i>
-                            <p class="small mt-2">AI extracts data</p>
-                        </div>
-                        <div class="col-4">
-                            <i class="bi bi-check-circle text-primary fs-4"></i>
-                            <p class="small mt-2">Review & save</p>
-                        </div>
-                    </div>
-                </div>
+<!-- Page Header -->
+<div class="page-header d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+    <div>
+        <h1 class="mb-1">Dashboard</h1>
+        <p class="text-secondary mb-0">Track and manage your business expenses</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('locations_page') }}" class="btn btn-outline-primary shadow-sm">
+            <i class="bi bi-geo-alt"></i> <span class="d-none d-sm-inline">Locations</span>
+        </a>
+        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-primary shadow-sm">
+            <i class="bi bi-plus-lg"></i> Add <span class="d-none d-sm-inline">Receipts</span>
+        </a>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center py-4">
+                <div class="summary-stat-label mb-2">Total Expenses</div>
+                <div class="summary-stat-value">${{ "%.2f"|format(total_amount) }}</div>
+                <div class="text-muted small mt-1">All time</div>
             </div>
         </div>
     </div>
-    
-    <!-- Summary Statistics -->
-    <div class="col-lg-6 mb-4">
-        <div class="card stats-card text-white">
-            <div class="card-header border-0">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Expense Summary</h5>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center py-4">
+                <div class="summary-stat-label mb-2">Receipts</div>
+                <div class="summary-stat-value">{{ total_count or 0 }}</div>
+                <div class="text-muted small mt-1">Total uploaded</div>
             </div>
-            <div class="card-body">
-                <div class="row text-center">
-                    <div class="col-6">
-                        <div class="border-end border-light">
-                            <h3 class="mb-1">${{ "%.2f"|format(total_amount) }}</h3>
-                            <p class="mb-0 opacity-75">Total Expenses</p>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <h3 class="mb-1">{{ total_count or 0 }}</h3>
-                        <p class="mb-0 opacity-75">Total Receipts</p>
-                    </div>
-                </div>
-                
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center py-4">
+                <div class="summary-stat-label mb-2">Top Category</div>
                 {% if category_breakdown %}
-                <hr class="border-light my-3">
-                <h6 class="mb-2">Top Categories</h6>
-                {% for category, amount, count in category_breakdown[:3] %}
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="small">
-                        {% for cat_code, cat_name in [
-                            ('office_supplies', 'Office Supplies'),
-                            ('travel', 'Travel & Transportation'),
-                            ('meals', 'Meals & Entertainment'),
-                            ('equipment', 'Equipment & Technology'),
-                            ('advertising', 'Advertising & Marketing'),
-                            ('professional_services', 'Professional Services'),
-                            ('utilities', 'Utilities'),
-                            ('rent', 'Rent & Facility Costs'),
-                            ('insurance', 'Insurance'),
-                            ('other', 'Other Business Expenses')
-                        ] %}
-                            {% if cat_code == category %}{{ cat_name }}{% endif %}
-                        {% endfor %}
-                    </span>
-                    <span class="fw-bold">${{ "%.2f"|format(amount) }}</span>
-                </div>
-                {% endfor %}
+                    {% set top_cat = category_breakdown[0] %}
+                    <div class="summary-stat-value">${{ "%.2f"|format(top_cat[1]) }}</div>
+                    <div class="text-muted small mt-1">
+                        {% set cat_names = {
+                            'inventory': 'Inventory',
+                            'office_supplies': 'Office Supplies',
+                            'travel': 'Travel',
+                            'meals': 'Meals',
+                            'equipment': 'Equipment',
+                            'advertising': 'Advertising',
+                            'professional_services': 'Services',
+                            'utilities': 'Utilities',
+                            'rent': 'Rent',
+                            'insurance': 'Insurance',
+                            'other': 'Other'
+                        } %}
+                        {{ cat_names.get(top_cat[0], top_cat[0]) }}
+                    </div>
+                {% else %}
+                    <div class="summary-stat-value">—</div>
+                    <div class="text-muted small mt-1">No data yet</div>
                 {% endif %}
             </div>
         </div>
     </div>
 </div>
 
-<!-- Recent Expenses -->
-{% if recent_expenses %}
-<div class="card">
-    <div class="card-header">
-        <div class="d-flex justify-content-between align-items-center">
-            <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Expenses</h5>
-            <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-light btn-sm">View All</a>
+<div class="row g-4">
+    <!-- Quick Upload -->
+    <div class="col-lg-5">
+        <div class="card h-100 shadow-sm border-primary-subtle">
+            <div class="card-header bg-primary text-white">
+                <i class="bi bi-cloud-upload me-2"></i> Upload Receipt
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('upload_receipt') }}" method="post" enctype="multipart/form-data" id="uploadForm">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="upload-area p-4 mb-3" onclick="document.getElementById('file').click()">
+                        <i class="bi bi-camera-fill d-block d-md-none mb-2" style="font-size: 2rem;"></i>
+                        <i class="bi bi-cloud-arrow-up d-none d-md-block"></i>
+                        <h6 class="mt-2">Snap or Drop Receipt</h6>
+                        <p class="small">Tap to use camera or browse</p>
+                        <p id="fileName" class="mt-2 fw-bold"></p>
+                    </div>
+                    
+                    {{ form.file(class="d-none", id="file", capture="camera") }}
+                    
+                    <div class="d-grid mt-3">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="bi bi-lightning-charge-fill me-1"></i> Process Receipt
+                        </button>
+                    </div>
+                </form>
+                
+                <div class="text-center mt-4 pt-3 border-top">
+                    <p class="text-muted small mb-2">JPG, PNG, PDF supported</p>
+                    <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-link btn-sm text-decoration-none p-0">
+                        <i class="bi bi-files me-1"></i> Bulk upload instead
+                    </a>
+                </div>
+            </div>
         </div>
     </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover expense-table mb-0">
-                <thead>
-                    <tr>
-                        <th>Merchant</th>
-                        <th>Amount</th>
-                        <th>Date</th>
-                        <th>Category</th>
-                        <th>Description</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for expense in recent_expenses %}
-                    <tr>
-                        <td>
-                            <strong>{{ expense[1] }}</strong>
-                        </td>
-                        <td>
-                            <span class="fw-bold text-success">${{ "%.2f"|format(expense[2]) }}</span>
-                        </td>
-                        <td>{{ expense[3] }}</td>
-                        <td>
-                            <span class="badge bg-secondary category-badge">
-                                {% for cat_code, cat_name in [
-                                    ('office_supplies', 'Office Supplies'),
-                                    ('travel', 'Travel & Transportation'),
-                                    ('meals', 'Meals & Entertainment'),
-                                    ('equipment', 'Equipment & Technology'),
-                                    ('advertising', 'Advertising & Marketing'),
-                                    ('professional_services', 'Professional Services'),
-                                    ('utilities', 'Utilities'),
-                                    ('rent', 'Rent & Facility Costs'),
-                                    ('insurance', 'Insurance'),
-                                    ('other', 'Other Business Expenses')
-                                ] %}
-                                    {% if cat_code == expense[4] %}{{ cat_name }}{% endif %}
-                                {% endfor %}
-                            </span>
-                        </td>
-                        <td>
-                            <span class="text-muted">{{ expense[5][:50] }}{% if expense[5] and expense[5]|length > 50 %}...{% endif %}</span>
-                        </td>
-                    </tr>
+    
+    <!-- Recent Activity -->
+    <div class="col-lg-7">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-clock-history me-2"></i> Recent Expenses</span>
+                <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-secondary btn-sm">
+                    View All
+                </a>
+            </div>
+            <div class="card-body p-0">
+                {% if recent_expenses %}
+                    {% for expense in recent_expenses[:5] %}
+                    <a href="{{ url_for('edit_expense', expense_id=expense[0]) }}" class="d-block text-decoration-none">
+                        <div class="d-flex justify-content-between align-items-center px-3 py-3 border-bottom expense-row">
+                            <div>
+                                <div class="expense-merchant">{{ expense[1] }}</div>
+                                <div class="expense-meta">
+                                    {% set cat_names = {
+                                        'inventory': 'Inventory',
+                                        'office_supplies': 'Office Supplies',
+                                        'travel': 'Travel',
+                                        'meals': 'Meals',
+                                        'equipment': 'Equipment',
+                                        'advertising': 'Advertising',
+                                        'professional_services': 'Services',
+                                        'utilities': 'Utilities',
+                                        'rent': 'Rent',
+                                        'insurance': 'Insurance',
+                                        'other': 'Other'
+                                    } %}
+                                    <span class="category-tag cat-{{ expense[4] }}">{{ cat_names.get(expense[4], expense[4]) }}</span>
+                                    <span class="ms-2"><i class="bi bi-calendar3 small me-1"></i>{{ expense[3] }}</span>
+                                    {% if expense[6] %}
+                                    <span class="ms-2"><i class="bi bi-geo-alt small me-1"></i>{{ expense[6] }}</span>
+                                    {% endif %}
+                                </div>
+                                {% if expense[7] %}
+                                <div class="small text-muted mt-1"><i class="bi bi-house-door small me-1"></i>{{ expense[7] }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="text-end">
+                                <div class="expense-amount mb-1">${{ "%.2f"|format(expense[2]) }}</div>
+                                <form action="{{ url_for('reprocess_expense', expense_id=expense[0]) }}" method="post" class="d-inline" onsubmit="return confirm('Re-run AI logic for this receipt? (Uses credits)')">
+                                    <button type="submit" class="btn btn-link btn-sm p-0 text-muted opacity-50 hover-opacity-100" title="Reprocess Receipt" onclick="event.stopPropagation();">
+                                        <i class="bi bi-arrow-repeat"></i> Reprocess
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </a>
                     {% endfor %}
-                </tbody>
-            </table>
+                {% else %}
+                    <div class="empty-state">
+                        <i class="bi bi-receipt"></i>
+                        <h5>No expenses yet</h5>
+                        <p>Upload your first receipt to get started</p>
+                    </div>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>
-{% else %}
-<div class="card">
-    <div class="card-body text-center py-5">
-        <i class="bi bi-receipt fs-1 text-muted mb-3"></i>
-        <h5 class="text-muted">No expenses recorded yet</h5>
-        <p class="text-muted">Upload your first receipt to get started!</p>
-    </div>
-</div>
-{% endif %}
 
-<!-- Tax Season Info -->
-<div class="alert alert-info mt-4">
-    <div class="row align-items-center">
-        <div class="col-auto">
-            <i class="bi bi-info-circle fs-4"></i>
+<!-- Breakdowns -->
+<div class="row g-4 mt-2">
+    <!-- Category Breakdown -->
+    {% if category_breakdown %}
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <i class="bi bi-pie-chart me-2"></i> Category Spending
+            </div>
+            <div class="card-body">
+                {% set cat_names = {
+                    'inventory': 'Inventory',
+                    'office_supplies': 'Office Supplies',
+                    'travel': 'Travel & Transportation',
+                    'meals': 'Meals & Entertainment',
+                    'equipment': 'Equipment & Technology',
+                    'advertising': 'Advertising & Marketing',
+                    'professional_services': 'Professional Services',
+                    'utilities': 'Utilities',
+                    'rent': 'Rent & Facility Costs',
+                    'insurance': 'Insurance',
+                    'other': 'Other Business Expenses'
+                } %}
+                {% for category, amount, count in category_breakdown[:6] %}
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="category-tag cat-{{ category }}">{{ cat_names.get(category, category) }}</span>
+                        <strong>${{ "%.2f"|format(amount) }}</strong>
+                    </div>
+                    <div class="progress" style="height: 4px;">
+                        {% set pct = (amount / total_amount * 100) if total_amount > 0 else 0 %}
+                        <div class="progress-bar" role="progressbar" style="width: {{ pct }}%; background-color: var(--primary-light);"></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
         </div>
-        <div class="col">
-            <h6 class="alert-heading mb-1">Tax Season Ready</h6>
-            <p class="mb-0">
-                This app tracks your business expenses for tax deduction purposes. 
-                <strong>Keep receipts for at least 3 years</strong> as required by the IRS. 
-                You can export your data at any time for your accountant.
-            </p>
-        </div>
-        <div class="col-auto">
-            <a href="{{ url_for('export_expenses', format='excel') }}" class="btn btn-outline-info">
-                <i class="bi bi-download"></i> Export Data
-            </a>
+    </div>
+    {% endif %}
+
+    <!-- Location Breakdown -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-geo-alt me-2"></i> Spending by Location</span>
+                <span class="badge bg-primary">This Month</span>
+            </div>
+            <div class="card-body">
+                {% if location_breakdown %}
+                    {% for location, amount, count in location_breakdown[:6] %}
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span>
+                                {% if 'Reno' in location %}
+                                    <i class="bi bi-pin-map-fill text-danger me-1"></i>
+                                {% elif 'Sparks' in location %}
+                                    <i class="bi bi-pin-map-fill text-primary me-1"></i>
+                                {% else %}
+                                    <i class="bi bi-geo-alt text-muted me-1"></i>
+                                {% endif %}
+                                {{ location }}
+                            </span>
+                            <strong>${{ "%.2f"|format(amount) }}</strong>
+                        </div>
+                        <div class="progress" style="height: 4px;">
+                            {% set month_total = location_breakdown | sum(attribute=1) %}
+                            {% set pct = (amount / month_total * 100) if month_total > 0 else 0 %}
+                            <div class="progress-bar" role="progressbar" style="width: {{ pct }}%; background-color: {{ '#DC3545' if 'Reno' in location else '#0D6EFD' if 'Sparks' in location else '#6C757D' }};"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <div class="text-end mt-2">
+                        <a href="{{ url_for('locations_page') }}" class="btn btn-link btn-sm p-0 text-decoration-none">
+                            <i class="bi bi-gear me-1"></i> Manage Business Database
+                        </a>
+                    </div>
+                {% else %}
+                    <div class="text-center py-4 text-muted">
+                        <i class="bi bi-info-circle mb-2 d-block fs-4"></i>
+                        <p class="mb-3">No location data for this month</p>
+                        <a href="{{ url_for('locations_page') }}" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-plus-circle me-1"></i> Add Known Businesses
+                        </a>
+                    </div>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>
+
+<style>
+    .expense-row {
+        transition: background-color 0.15s ease;
+    }
+    .expense-row:hover {
+        background-color: var(--bg-page);
+    }
+    .expense-row:last-child {
+        border-bottom: none !important;
+    }
+</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Show loading spinner on form submit
-    document.getElementById('uploadForm').addEventListener('submit', function() {
-        const submitBtn = document.querySelector('input[type="submit"]');
-        submitBtn.value = 'Processing...';
-        submitBtn.disabled = true;
-        
-        // Show processing message
-        const uploadArea = document.querySelector('.upload-area');
-        uploadArea.innerHTML = `
-            <div class="spinner-border text-primary mb-3" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <h6>Processing receipt...</h6>
-            <p class="text-muted">This may take a few seconds</p>
-        `;
-    });
+    const form = document.getElementById('uploadForm');
+    if (form) {
+        form.addEventListener('submit', function() {
+            const submitBtn = form.querySelector('input[type="submit"], button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.value = 'Processing...';
+            }
+            
+            const uploadArea = document.querySelector('.upload-area');
+            if (uploadArea) {
+                uploadArea.innerHTML = `
+                    <div class="spinner-border text-primary mb-3" role="status"></div>
+                    <h6>Processing receipt...</h6>
+                    <p class="text-muted">AI is extracting data</p>
+                `;
+            }
+        });
+    }
 });
 </script>
-{% endblock %} 
+{% endblock %}

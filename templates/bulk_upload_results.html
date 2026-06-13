@@ -19,14 +19,18 @@
                         <div class="text-muted">Successfully Processed</div>
                     </div>
                     <div class="col-md-3">
+                        <div class="h2 text-secondary">{{ skipped_count or 0 }}</div>
+                        <div class="text-muted">Skipped / Removed</div>
+                    </div>
+                    <div class="col-md-3">
                         <div class="h2 text-warning">{{ error_count }}</div>
-                        <div class="text-muted">Need Attention</div>
+                        <div class="text-muted">Failed Saves</div>
                     </div>
                     <div class="col-md-3">
                         <div class="h2 text-info">{{ results|length }}</div>
-                        <div class="text-muted">Total Receipts</div>
+                        <div class="text-muted">Reviewed Entries</div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-3 mt-3">
                         {% set success_results = results|selectattr('status', 'equalto', 'success')|list %}
                         {% set total_amount = success_results|selectattr('amount', 'defined')|sum(attribute='amount') or 0 %}
                         <div class="h2 text-primary">${{ "%.2f"|format(total_amount) }}</div>
@@ -70,15 +74,11 @@
                                 <td>
                                     {% if result.status == 'success' %}
                                         <span class="badge bg-success">
-                                            <i class="bi bi-check-circle"></i> Success
+                                            <i class="bi bi-check-circle"></i> Saved
                                         </span>
-                                    {% elif result.status == 'partial' %}
-                                        <span class="badge bg-warning">
-                                            <i class="bi bi-exclamation-triangle"></i> Partial
-                                        </span>
-                                    {% elif result.status == 'duplicate' %}
+                                    {% elif result.status == 'skipped' %}
                                         <span class="badge bg-secondary">
-                                            <i class="bi bi-files"></i> Duplicate
+                                            <i class="bi bi-slash-circle"></i> Skipped
                                         </span>
                                     {% else %}
                                         <span class="badge bg-danger">
@@ -90,21 +90,21 @@
                                     <small class="text-muted">{{ result.filename or 'Unknown file' }}</small>
                                 </td>
                                 <td>
-                                    {% if (result.status == 'success' or result.status == 'partial') and result.merchant %}
+                                    {% if result.merchant %}
                                         <strong>{{ result.merchant }}</strong>
                                     {% else %}
                                         <span class="text-muted">-</span>
                                     {% endif %}
                                 </td>
                                 <td>
-                                    {% if (result.status == 'success' or result.status == 'partial') and result.amount is not none %}
+                                    {% if result.amount is not none %}
                                         <span class="fw-bold text-success">${{ "%.2f"|format(result.amount) }}</span>
                                     {% else %}
                                         <span class="text-muted">-</span>
                                     {% endif %}
                                 </td>
                                 <td>
-                                    {% if (result.status == 'success' or result.status == 'partial') and result.date %}
+                                    {% if result.date %}
                                         {{ result.date }}
                                     {% else %}
                                         <span class="text-muted">-</span>
@@ -150,13 +150,9 @@
                                 </td>
                                 <td>
                                     {% if result.status == 'success' %}
-                                        {% if result.get('items_count', 0) > 0 %}
-                                            <small class="text-success">{{ result.items_count }} item(s)</small>
-                                        {% else %}
-                                            <small class="text-muted">No items</small>
-                                        {% endif %}
-                                    {% elif result.status == 'partial' %}
-                                        <small class="text-warning">{{ result.get('error', 'Needs review') }}</small>
+                                        <small class="text-success">{{ result.get('note', 'Saved') }}</small>
+                                    {% elif result.status == 'skipped' %}
+                                        <small class="text-muted">{{ result.get('error', 'Removed') }}</small>
                                     {% else %}
                                         <small class="text-danger">{{ result.get('error', 'Processing failed') }}</small>
                                     {% endif %}
@@ -177,7 +173,7 @@
             </div>
             <div class="card-body">
                 <div class="alert alert-warning">
-                    <h6><i class="bi bi-exclamation-triangle"></i> {{ error_count }} receipt{% if error_count != 1 %}s{% endif %} need attention</h6>
+                    <h6><i class="bi bi-exclamation-triangle"></i> {{ error_count }} receipt{% if error_count != 1 %}s{% endif %} failed to save</h6>
                     <p class="mb-2">For receipts that couldn't be automatically processed:</p>
                     <ul class="mb-0">
                         <li>Check the image quality (clear, well-lit, full receipt visible)</li>
@@ -188,6 +184,9 @@
                 <div class="d-flex gap-2">
                     <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
                         <i class="bi bi-plus"></i> Upload Individual Receipt
+                    </a>
+                    <a href="{{ url_for('issue_dashboard') }}" class="btn btn-outline-warning">
+                        <i class="bi bi-tools"></i> Open Issue Center
                     </a>
                     <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-outline-secondary">
                         <i class="bi bi-arrow-clockwise"></i> Try Bulk Upload Again

@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+.git
+.gitignore
+uploads/
+bulk_reviews/
+backups/
+poppler/
+receipts.db
+service*.log
+*.sqlite3
+.DS_Store

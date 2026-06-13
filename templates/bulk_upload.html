@@ -5,6 +5,19 @@
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-lg-8">
+
+        {% if pending_review %}
+        <div class="alert alert-warning d-flex align-items-center justify-content-between mb-3">
+            <div>
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                <strong>Interrupted upload found</strong> — {{ pending_review.count }} receipt(s) were processed before the session ended.
+            </div>
+            <a href="{{ url_for('bulk_upload_resume', review_id=pending_review.review_id) }}" class="btn btn-warning btn-sm ms-3 text-nowrap">
+                <i class="bi bi-arrow-clockwise"></i> Resume Review
+            </a>
+        </div>
+        {% endif %}
+
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> Bulk Upload Receipts</h5>
@@ -29,6 +42,49 @@
                         </div>
                         <div id="fileSizeWarning" class="alert alert-warning mt-2" style="display: none;">
                             <i class="bi bi-exclamation-triangle"></i> <span id="warningText"></span>
+                        </div>
+                    </div>
+                    
+                    <!-- Bulk Settings -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-gear"></i> Bulk Processing Options</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label for="default_merchant" class="form-label">
+                                        <i class="bi bi-shop"></i> Default Merchant Name
+                                    </label>
+                                    <input type="text" class="form-control" id="default_merchant" name="default_merchant" 
+                                           placeholder="e.g., Amazon.com, Walmart, etc.">
+                                    <div class="form-text">
+                                        Will be used for receipts where merchant name cannot be detected automatically.
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="default_category" class="form-label">
+                                        <i class="bi bi-tag"></i> Default Category
+                                    </label>
+                                    <select class="form-select" id="default_category" name="default_category">
+                                        <option value="">Auto-detect based on merchant</option>
+                                        <option value="inventory">Inventory (Items for Resale)</option>
+                                        <option value="office_supplies">Office Supplies</option>
+                                        <option value="travel">Travel & Transportation</option>
+                                        <option value="meals">Meals & Entertainment</option>
+                                        <option value="equipment">Equipment & Technology</option>
+                                        <option value="advertising">Advertising & Marketing</option>
+                                        <option value="professional_services">Professional Services</option>
+                                        <option value="utilities">Utilities</option>
+                                        <option value="rent">Rent & Facility Costs</option>
+                                        <option value="insurance">Insurance</option>
+                                        <option value="other">Other Business Expenses</option>
+                                    </select>
+                                    <div class="form-text">
+                                        Override automatic categorization with this category for all receipts.
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
