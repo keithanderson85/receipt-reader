@@ -85,7 +85,14 @@
                                 </td>
                                 <td>
                                     <div class="fw-semibold">{{ entry.original_filename }}</div>
-                                    <small class="text-muted">{{ entry.method|capitalize }}</small>
+                                    <div class="d-flex align-items-center gap-1 mt-1">
+                                        <small class="text-muted">{{ entry.method|capitalize }}</small>
+                                        {% if entry.page_count and entry.page_count > 1 %}
+                                            <span class="badge bg-info text-dark" title="Multi-page receipt stitched automatically">
+                                                <i class="bi bi-files"></i> {{ entry.page_count }} pages
+                                            </span>
+                                        {% endif %}
+                                    </div>
                                 </td>
                                 <td>
                                     {% if entry.merchant_name %}

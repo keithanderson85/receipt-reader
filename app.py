@@ -17,6 +17,7 @@ from wtforms.validators import DataRequired, NumberRange, Length, Optional
 from werkzeug.utils import secure_filename
 import pandas as pd
 from receipt_ocr_genai import ReceiptOCRGenAI
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 import json
 import logging
@@ -611,21 +612,27 @@ def correct_location_by_zip(address, current_location):
         
     return current_location
 
-def find_matching_location(address_str):
+def find_matching_location(address_str, user_id=None):
     """Try to match an extracted address against the locations database using fuzzy logic."""
     if not address_str:
+        return None
+        
+    if user_id is None and current_user.is_authenticated:
+        user_id = current_user.id
+        
+    if user_id is None:
         return None
         
     conn = sqlite3.connect('receipts.db')
     cursor = conn.cursor()
     
     # Try exact match first
-    cursor.execute('SELECT id, name, category, address FROM locations WHERE address = ? AND user_id = ?', (address_str, current_user.id))
+    cursor.execute('SELECT id, name, category, address FROM locations WHERE address = ? AND user_id = ?', (address_str, user_id))
     match = cursor.fetchone()
     
     if not match:
         # Try fuzzy matching
-        cursor.execute('SELECT id, name, category, address FROM locations WHERE user_id = ?', (current_user.id,))
+        cursor.execute('SELECT id, name, category, address FROM locations WHERE user_id = ?', (user_id,))
         all_locations = cursor.fetchall()
         
         best_ratio = 0
@@ -1831,10 +1838,143 @@ def bulk_upload_resume(review_id):
         categories=EXPENSE_CATEGORIES
     )
 
+def _process_bulk_receipt_task(task):
+    """Worker task executed in thread pool for parallel OCR and extraction."""
+    entry = {
+        'id': task['entry_id'],
+        'original_filename': task['original_filename'],
+        'issues': [],
+        'status': 'ready',
+        'can_save': True,
+        'duplicate_flag': False,
+        'uploaded_filename': task['stored_upload_name'],
+        'uploaded_path': task['upload_path'],
+        'processed_path': None
+    }
+
+    try:
+        upload_path = task['upload_path']
+        user_id = task['user_id']
+        default_merchant = task['default_merchant']
+        default_category = task['default_category']
+
+        file_hash = calculate_file_hash(upload_path)
+        ocr_result = receipt_ocr.process_receipt(upload_path)
+
+        processed_filename = ocr_result.get('processed_filename') or ocr_result.get('converted_filename')
+        processed_path = None
+        receipt_filename = task['stored_upload_name']
+        if processed_filename:
+            processed_path = processed_filename if os.path.isabs(processed_filename) else os.path.join(app.config['UPLOAD_FOLDER'], processed_filename)
+            receipt_filename = os.path.basename(processed_filename)
+            entry['processed_filename'] = os.path.basename(processed_filename)
+            entry['processed_path'] = processed_path
+
+        amount_val = ocr_result.get('amount')
+        try:
+            amount = float(amount_val) if amount_val not in (None, '') else None
+            amount = round(amount, 2) if amount is not None else None
+        except (TypeError, ValueError):
+            amount = None
+
+        date_val = ocr_result.get('date')
+        if isinstance(date_val, datetime):
+            date_val = date_val.date().isoformat()
+        elif hasattr(date_val, 'isoformat') and not isinstance(date_val, str):
+            try:
+                date_val = date_val.isoformat()
+            except Exception:
+                date_val = str(date_val)
+        
+        detected_merchant = clean_merchant_name((ocr_result.get('merchant_name') or '').strip())
+        ocr_result['location'] = correct_location_by_zip(ocr_result.get('address', ''), ocr_result.get('location', ''))
+
+        location_match = find_matching_location(ocr_result.get('address'), user_id=user_id)
+        location_match_info = None
+        category = None
+        
+        if location_match:
+            location_match_info = {
+                'id': location_match[0],
+                'name': location_match[1],
+                'category': location_match[2]
+            }
+            final_merchant = location_match[1]
+            if location_match[2]:
+                category = location_match[2]
+        else:
+            final_merchant = detected_merchant or default_merchant
+
+        if not category:
+            category = infer_category_from_merchant(final_merchant, default_category)
+
+        duplicates = {'exact_file': [], 'exact_match': [], 'similar': []}
+        duplicate_flag = False
+        if amount is not None and date_val:
+            duplicates = check_for_duplicates(final_merchant, amount, date_val, file_hash, user_id=user_id)
+            duplicate_flag = bool(duplicates['exact_file'] or duplicates['exact_match'])
+
+        entry.update({
+            'merchant_name': final_merchant,
+            'detected_merchant': detected_merchant,
+            'location': ocr_result.get('location', ''),
+            'address': ocr_result.get('address', ''),
+            'location_match': location_match_info,
+            'amount': amount,
+            'date': date_val,
+            'category': category,
+            'page_count': ocr_result.get('page_count', 1),
+            'is_multipage': ocr_result.get('is_multipage', False),
+            'description': f"Auto-processed from bulk upload (Method: {ocr_result.get('method', 'unknown')})",
+            'method': ocr_result.get('method', 'unknown'),
+            'file_hash': file_hash,
+            'receipt_filename': receipt_filename,
+            'items': serialize_items(ocr_result.get('items')),
+            'subtotal': ocr_result.get('subtotal'),
+            'tax_amount': ocr_result.get('tax_amount'),
+            'tax_rate': ocr_result.get('tax_rate'),
+            'discount_amount': ocr_result.get('discount_amount'),
+            'raw_json': ocr_result.get('raw_text'),
+            'duplicate_flag': duplicate_flag,
+            'duplicate_examples': [{
+                'id': dup[0],
+                'merchant_name': dup[1],
+                'amount': dup[2],
+                'date': dup[3]
+            } for dup in duplicates.get('exact_match', [])[:5]],
+            'duplicate_file_match': bool(duplicates.get('exact_file'))
+        })
+
+        entry['can_save'] = bool(final_merchant and amount is not None and date_val)
+
+        if not entry['can_save']:
+            entry['status'] = 'needs_data'
+            if not final_merchant:
+                entry['issues'].append('Merchant missing')
+            if amount is None:
+                entry['issues'].append('Amount missing or unreadable')
+            if not date_val:
+                entry['issues'].append('Date missing')
+        elif duplicate_flag:
+            entry['status'] = 'duplicate'
+            entry['issues'].append('Matches an existing receipt with the same amount and date.')
+        else:
+            entry['status'] = 'ready'
+
+    except Exception as e:
+        entry['status'] = 'error'
+        entry['issues'].append(f'Processing failed: {str(e)}')
+        entry['can_save'] = False
+        cleanup_entry_files(entry)
+        entry['uploaded_path'] = None
+        entry['processed_path'] = None
+
+    return entry
+
 @app.route('/bulk_upload', methods=['POST'])
 @login_required
 def bulk_upload_receipts():
-    """Handle bulk receipt upload and processing (pre-review stage)."""
+    """Handle bulk receipt upload with concurrent processing."""
     form = BulkReceiptForm()
 
     if not form.validate_on_submit():
@@ -1860,173 +2000,61 @@ def bulk_upload_receipts():
     default_merchant = request.form.get('default_merchant', '').strip()
     default_category = request.form.get('default_category', '').strip() or None
 
-    review_entries = []
-    summary_counts = {'ready': 0, 'duplicate': 0, 'needs_data': 0, 'error': 0}
-
-    # Generate review_id before the loop so partial progress is preserved on failure
+    # Step 1: Save all uploaded files to disk first
+    upload_tasks = []
     review_id = str(uuid.uuid4())
     session['pending_bulk_review_id'] = review_id
 
     for file_obj in files:
         if not file_obj or file_obj.filename == '':
             continue
-
-        entry = {
-            'id': str(uuid.uuid4()),
-            'original_filename': file_obj.filename,
-            'issues': [],
-            'status': 'ready',
-            'can_save': True,
-            'duplicate_flag': False,
-            'uploaded_path': None,
-            'processed_path': None
-        }
-
         try:
             safe_name = secure_filename(file_obj.filename)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
             stored_upload_name = timestamp + safe_name
             upload_path = os.path.join(app.config['UPLOAD_FOLDER'], stored_upload_name)
             file_obj.save(upload_path)
-            entry['uploaded_filename'] = stored_upload_name
-            entry['uploaded_path'] = upload_path
 
-            file_hash = calculate_file_hash(upload_path)
-            ocr_result = receipt_ocr.process_receipt(upload_path)
-
-            # DEBUG: Print OCR result keys and processed_filename
-            print(f"DEBUG: OCR result keys: {list(ocr_result.keys())}")
-            print(f"DEBUG: processed_filename in result: {ocr_result.get('processed_filename')}")
-            print(f"DEBUG: converted_filename in result: {ocr_result.get('converted_filename')}")
-
-            # Try to get the processed filename (image) if available
-            processed_filename = ocr_result.get('processed_filename')
-            if not processed_filename:
-                processed_filename = ocr_result.get('converted_filename')
-            
-            processed_path = None
-            receipt_filename = stored_upload_name
-            if processed_filename:
-                processed_path = processed_filename if os.path.isabs(processed_filename) else os.path.join(app.config['UPLOAD_FOLDER'], processed_filename)
-                receipt_filename = os.path.basename(processed_filename)
-                entry['processed_filename'] = os.path.basename(processed_filename)
-                entry['processed_path'] = processed_path
-
-            amount_val = ocr_result.get('amount')
-            try:
-                amount = float(amount_val) if amount_val not in (None, '') else None
-                amount = round(amount, 2) if amount is not None else None
-            except (TypeError, ValueError):
-                amount = None
-
-            date_val = ocr_result.get('date')
-            if isinstance(date_val, datetime):
-                date_val = date_val.date().isoformat()
-            elif hasattr(date_val, 'isoformat') and not isinstance(date_val, str):
-                try:
-                    date_val = date_val.isoformat()
-                except Exception:
-                    date_val = str(date_val)
-            
-            # Clean and correct data
-            detected_merchant = clean_merchant_name((ocr_result.get('merchant_name') or '').strip())
-            ocr_result['location'] = correct_location_by_zip(ocr_result.get('address', ''), ocr_result.get('location', ''))
-
-            # Try to match address to a known location
-            location_match = find_matching_location(ocr_result.get('address'))
-            location_match_info = None
-            category = None
-            
-            if location_match:
-                print(f"DEBUG: Found matching location for bulk: {location_match[1]}")
-                location_match_info = {
-                    'id': location_match[0],
-                    'name': location_match[1],
-                    'category': location_match[2]
-                }
-                final_merchant = location_match[1]
-                if location_match[2]:
-                    category = location_match[2]
-            else:
-                final_merchant = detected_merchant or default_merchant
-
-            if not category:
-                category = infer_category_from_merchant(final_merchant, default_category)
-
-            duplicates = {'exact_file': [], 'exact_match': [], 'similar': []}
-            duplicate_flag = False
-            if amount is not None and date_val:
-                duplicates = check_for_duplicates(final_merchant, amount, date_val, file_hash)
-                duplicate_flag = bool(duplicates['exact_file'] or duplicates['exact_match'])
-
-            entry.update({
-                'merchant_name': final_merchant,
-                'detected_merchant': detected_merchant,
-                'location': ocr_result.get('location', ''),
-                'address': ocr_result.get('address', ''),
-                'location_match': location_match_info,
-                'amount': amount,
-                'date': date_val,
-                'category': category,
-                'description': f"Auto-processed from bulk upload (Method: {ocr_result.get('method', 'unknown')})",
-                'method': ocr_result.get('method', 'unknown'),
-                'file_hash': file_hash,
-                'receipt_filename': receipt_filename,
-                'items': serialize_items(ocr_result.get('items')),
-                'subtotal': ocr_result.get('subtotal'),
-                'tax_amount': ocr_result.get('tax_amount'),
-                'tax_rate': ocr_result.get('tax_rate'),
-                'discount_amount': ocr_result.get('discount_amount'),
-                'raw_json': ocr_result.get('raw_text'),
-                'duplicate_flag': duplicate_flag,
-                'duplicate_examples': [{
-                    'id': dup[0],
-                    'merchant_name': dup[1],
-                    'amount': dup[2],
-                    'date': dup[3]
-                } for dup in duplicates.get('exact_match', [])[:5]],
-                'duplicate_file_match': bool(duplicates.get('exact_file'))
+            upload_tasks.append({
+                'entry_id': str(uuid.uuid4()),
+                'original_filename': file_obj.filename,
+                'stored_upload_name': stored_upload_name,
+                'upload_path': upload_path,
+                'user_id': current_user.id,
+                'default_merchant': default_merchant,
+                'default_category': default_category
             })
+        except Exception as save_err:
+            print(f"Error saving file {file_obj.filename}: {save_err}")
 
-            entry['can_save'] = bool(final_merchant and amount is not None and date_val)
-
-            if not entry['can_save']:
-                entry['status'] = 'needs_data'
-                if not final_merchant:
-                    entry['issues'].append('Merchant missing')
-                if amount is None:
-                    entry['issues'].append('Amount missing or unreadable')
-                if not date_val:
-                    entry['issues'].append('Date missing')
-            elif duplicate_flag:
-                entry['status'] = 'duplicate'
-                entry['issues'].append('Matches an existing receipt with the same amount and date.')
-            else:
-                entry['status'] = 'ready'
-
-        except Exception as e:
-            entry['status'] = 'error'
-            entry['issues'].append(f'Processing failed: {str(e)}')
-            entry['can_save'] = False
-            cleanup_entry_files(entry)
-            entry['uploaded_path'] = None
-            entry['processed_path'] = None
-
-        review_entries.append(entry)
-        if entry['status'] in summary_counts:
-            summary_counts[entry['status']] += 1
-
-        # Save after each file so partial progress survives a timeout or crash
-        save_bulk_review_payload(review_id, {
-            'id': review_id,
-            'user_id': current_user.id,
-            'created_at': datetime.utcnow().isoformat(),
-            'entries': review_entries
-        })
-
-    if not review_entries:
-        flash('No valid files were provided.', 'error')
+    if not upload_tasks:
+        flash('No valid files could be saved.', 'error')
         return redirect(url_for('bulk_upload_page'))
+
+    # Step 2: Execute OCR tasks in parallel with ThreadPoolExecutor (max 3 workers to stay within rate limits)
+    review_entries = []
+    summary_counts = {'ready': 0, 'duplicate': 0, 'needs_data': 0, 'error': 0}
+    max_workers = min(3, len(upload_tasks))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_task = {executor.submit(_process_bulk_receipt_task, task): task for task in upload_tasks}
+        
+        for future in as_completed(future_to_task):
+            try:
+                entry = future.result()
+                review_entries.append(entry)
+                if entry['status'] in summary_counts:
+                    summary_counts[entry['status']] += 1
+                
+                # Persist incremental progress
+                save_bulk_review_payload(review_id, {
+                    'id': review_id,
+                    'user_id': current_user.id,
+                    'created_at': datetime.utcnow().isoformat(),
+                    'entries': review_entries
+                })
+            except Exception as fut_err:
+                print(f"Thread execution error: {fut_err}")
 
     summary_counts['total'] = len(review_entries)
     summary_counts['auto_select'] = sum(1 for entry in review_entries if entry['status'] == 'ready')
@@ -2040,6 +2068,17 @@ def bulk_upload_receipts():
     cursor.execute('SELECT id, name, address, category FROM locations WHERE user_id = ? ORDER BY name ASC', (current_user.id,))
     locations = [{'id': r[0], 'name': r[1], 'address': r[2], 'category': r[3]} for r in cursor.fetchall()]
     conn.close()
+
+    flash('Receipts analyzed. Review duplicates before saving.', 'info')
+    return render_template(
+        'bulk_upload_review.html',
+        review_id=review_id,
+        entries=review_entries,
+        summary=summary_counts,
+        decision_form=decision_form,
+        locations=locations,
+        categories=EXPENSE_CATEGORIES
+    )
 
     flash('Receipts analyzed. Review duplicates before saving.', 'info')
     return render_template(

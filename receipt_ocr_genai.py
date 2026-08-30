@@ -4,8 +4,9 @@ import json
 import os
 import base64
 import time
+import random
 import io
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 # Configure logging
@@ -14,7 +15,14 @@ logger = logging.getLogger(__name__)
 
 # Import OpenAI
 try:
-    from openai import OpenAI
+    from openai import (
+        OpenAI,
+        APIError,
+        RateLimitError,
+        APITimeoutError,
+        APIConnectionError,
+        InternalServerError
+    )
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -31,106 +39,148 @@ except ImportError:
 
 class ReceiptOCRGenAI:
     def __init__(self, openai_api_key: Optional[str] = None):
-        """Initialize the GenAI client."""
+        """Initialize the GenAI client with timeout and model selection."""
+        self.default_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        
         if not openai_api_key:
             logger.warning("No OpenAI API key provided")
             self.openai_client = None
             return
 
         try:
-            self.openai_client = OpenAI(api_key=openai_api_key)
-            logger.info("OpenAI client initialized successfully")
+            # Configure OpenAI client with a 45-second timeout to prevent hanging connections
+            self.openai_client = OpenAI(
+                api_key=openai_api_key,
+                timeout=45.0,
+                max_retries=0  # Handled in call_openai_with_retry with exponential backoff
+            )
+            logger.info(f"OpenAI client initialized successfully with model: {self.default_model}")
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {e}")
             self.openai_client = None
 
-    def convert_pdf_to_image(self, pdf_path: str) -> str:
-        """Convert PDF to image and return the path to the permanent image file."""
+    def _get_poppler_path(self) -> Optional[str]:
+        """Resolve local poppler binary path on Windows if present."""
+        if os.name == 'nt':
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            local_poppler = os.path.join(current_dir, 'poppler', 'poppler-24.08.0', 'Library', 'bin')
+            if os.path.exists(local_poppler):
+                return local_poppler
+        return None
+
+    def convert_pdf_to_images(self, pdf_path: str) -> Tuple[str, List[str], int]:
+        """
+        Convert all pages of a PDF to JPEG images.
+        Stitches multi-page receipts vertically into a single permanent JPEG.
+        Returns: (stitched_image_path, list_of_page_image_paths, page_count)
+        """
         if not PDF_PROCESSING_AVAILABLE:
             raise ImportError("PDF processing not available. Install with: pip install pdf2image pillow")
             
         try:
-            logger.info(f"Converting PDF to image: {pdf_path}")
+            logger.info(f"Converting PDF to image(s): {pdf_path}")
+            poppler_path = self._get_poppler_path()
             
-            # On Windows, try to add poppler to PATH if it exists locally
-            poppler_path = None
-            if os.name == 'nt':  # Windows
-                # Look for local poppler installation
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                local_poppler = os.path.join(current_dir, 'poppler', 'poppler-24.08.0', 'Library', 'bin')
-                if os.path.exists(local_poppler):
-                    poppler_path = local_poppler
-                    logger.info(f"Found local poppler at: {poppler_path}")
-            
-            # Convert PDF to images (only first page for receipts)
+            # Convert all pages from PDF (dpi 200 is optimal balance of OCR clarity & speed)
             if poppler_path:
-                images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=300, poppler_path=poppler_path)
+                images = convert_from_path(pdf_path, dpi=200, poppler_path=poppler_path)
             else:
-                images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=300)
+                images = convert_from_path(pdf_path, dpi=200)
             
-            if not images:
+            page_count = len(images)
+            if page_count == 0:
                 raise ValueError("No pages found in PDF")
-                
-            # Use the first page
-            image = images[0]
-            
-            # Create permanent image file (replace .pdf with .jpg)
+
             temp_dir = os.path.dirname(pdf_path)
             base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-            image_path = os.path.join(temp_dir, f"{base_name}.jpg")
-            
-            # Save as JPEG
-            image.save(image_path, 'JPEG', quality=95)
-            logger.info(f"PDF converted to permanent image: {image_path}")
-            
-            return image_path
+            stitched_image_path = os.path.join(temp_dir, f"{base_name}.jpg")
+            page_image_paths = []
+
+            if page_count == 1:
+                # Single page receipt
+                images[0].save(stitched_image_path, 'JPEG', quality=92)
+                page_image_paths.append(stitched_image_path)
+                logger.info(f"PDF (1 page) converted to: {stitched_image_path}")
+            else:
+                # Multi-page receipt: stitch vertically and save individual page images
+                logger.info(f"Multi-page PDF detected ({page_count} pages). Stitching vertically...")
+                
+                # Save each page individually for high-fidelity multi-image prompt
+                for idx, img in enumerate(images):
+                    page_path = os.path.join(temp_dir, f"{base_name}_page_{idx+1}.jpg")
+                    img.save(page_path, 'JPEG', quality=90)
+                    page_image_paths.append(page_path)
+
+                # Create vertical composite
+                total_height = sum(img.height for img in images)
+                max_width = max(img.width for img in images)
+                
+                composite = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
+                y_offset = 0
+                for img in images:
+                    x_offset = (max_width - img.width) // 2
+                    composite.paste(img, (x_offset, y_offset))
+                    y_offset += img.height
+
+                composite.save(stitched_image_path, 'JPEG', quality=90)
+                logger.info(f"Multi-page PDF ({page_count} pages) stitched to: {stitched_image_path}")
+
+            return stitched_image_path, page_image_paths, page_count
             
         except Exception as e:
             logger.error(f"Failed to convert PDF to image: {e}")
             raise
 
+    def convert_pdf_to_image(self, pdf_path: str) -> str:
+        """Backward-compatible helper returning single/stitched image path."""
+        stitched_path, _, _ = self.convert_pdf_to_images(pdf_path)
+        return stitched_path
+
     def encode_image_to_base64(self, image_path: str) -> str:
-        """Encode image to base64 for GPT-4 Vision."""
+        """Encode image to base64 for OpenAI Vision."""
         try:
-            # Check if file exists
             if not os.path.exists(image_path):
                 raise FileNotFoundError(f"Image file not found: {image_path}")
             
-            # Get file size
             file_size = os.path.getsize(image_path)
-            logger.info(f"Image file size: {file_size} bytes")
             
-            # Check if file is too large (OpenAI has a 20MB limit)
-            if file_size > 20 * 1024 * 1024:  # 20MB in bytes
-                raise ValueError(f"Image file too large: {file_size} bytes (max 20MB)")
+            # If image is over 15MB, compress with PIL
+            if file_size > 15 * 1024 * 1024:
+                logger.info(f"Image large ({file_size / 1024 / 1024:.1f}MB), compressing...")
+                with Image.open(image_path) as img:
+                    img.thumbnail((2400, 2400))
+                    buffer = io.BytesIO()
+                    img.save(buffer, format="JPEG", quality=85)
+                    return base64.b64encode(buffer.getvalue()).decode('utf-8')
             
             with open(image_path, "rb") as image_file:
-                image_data = image_file.read()
-                encoded_string = base64.b64encode(image_data).decode('utf-8')
-                
-                # Log the first 100 characters of the base64 string for debugging
-                logger.info(f"Base64 string starts with: {encoded_string[:100]}...")
-                logger.info(f"Base64 string length: {len(encoded_string)}")
-                
-                return encoded_string
+                return base64.b64encode(image_file.read()).decode('utf-8')
         except Exception as e:
-            logger.error(f"Failed to encode image: {e}")
+            logger.error(f"Failed to encode image {image_path}: {e}")
             raise
 
-    def call_openai_with_retry(self, messages: List[Dict], model: str = "gpt-4o-mini", max_retries: int = 3, max_tokens: int = 1500) -> Optional[str]:
-        """Call OpenAI API with exponential backoff retry logic."""
+    def call_openai_with_retry(
+        self,
+        messages: List[Dict],
+        model: Optional[str] = None,
+        max_retries: int = 3,
+        max_tokens: int = 2500
+    ) -> Optional[str]:
+        """Call OpenAI API with typed exception handling, structured JSON mode, and exponential backoff."""
         if not self.openai_client:
             raise Exception("OpenAI client not initialized")
 
+        use_model = model or self.default_model
         last_error = None
 
         for attempt in range(max_retries):
             try:
-                logger.info(f"OpenAI API attempt {attempt + 1}/{max_retries}")
+                logger.info(f"OpenAI API call (attempt {attempt + 1}/{max_retries}, model: {use_model})...")
 
                 response = self.openai_client.chat.completions.create(
-                    model=model,
+                    model=use_model,
                     messages=messages,
+                    response_format={"type": "json_object"},
                     max_tokens=max_tokens,
                     temperature=0.1
                 )
@@ -139,31 +189,28 @@ class ReceiptOCRGenAI:
                 logger.info(f"✅ OpenAI API successful on attempt {attempt + 1}")
                 return response_text
                 
+            except (RateLimitError, APITimeoutError, APIConnectionError, InternalServerError) as retryable_err:
+                last_error = retryable_err
+                logger.warning(f"⚠️ Retryable OpenAI error (attempt {attempt + 1}/{max_retries}): {retryable_err}")
+                
+                if attempt < max_retries - 1:
+                    # Exponential backoff with random jitter: (2^attempt * 2) + jitter
+                    jitter = random.uniform(0.5, 2.0)
+                    wait_time = (2 ** attempt) * 2 + jitter
+                    if isinstance(retryable_err, RateLimitError):
+                        wait_time = max(wait_time, 5.0 * (attempt + 1) + jitter)
+                    
+                    logger.info(f"⏳ Backing off for {wait_time:.1f}s before retry...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise retryable_err
+                    
             except Exception as e:
                 last_error = e
-                error_str = str(e)
-                logger.warning(f"❌ OpenAI API attempt {attempt + 1} failed: {error_str}")
-                
-                # Check if it's a server error (500) or rate limit
-                if "500" in error_str or "Internal Server Error" in error_str:
-                    if attempt < max_retries - 1:
-                        # Exponential backoff: 2^attempt seconds
-                        wait_time = 2 ** attempt
-                        logger.info(f"⏳ Waiting {wait_time} seconds before retry...")
-                        time.sleep(wait_time)
-                        continue
-                elif "rate limit" in error_str.lower():
-                    if attempt < max_retries - 1:
-                        wait_time = 10 * (attempt + 1)  # 10, 20, 30 seconds
-                        logger.info(f"⏳ Rate limited, waiting {wait_time} seconds...")
-                        time.sleep(wait_time)
-                        continue
-                else:
-                    # For other errors, don't retry
-                    logger.error(f"Non-retryable error: {error_str}")
-                    raise e
+                logger.error(f"❌ Non-retryable error during OpenAI call: {e}")
+                raise e
         
-        # All retries failed
         logger.error(f"All {max_retries} attempts failed. Last error: {last_error}")
         raise last_error
 
@@ -171,34 +218,32 @@ class ReceiptOCRGenAI:
         """Create a fallback result when OpenAI is unavailable."""
         filename = os.path.basename(image_path)
         
-        # Try to extract some basic info from filename if it follows a pattern
         date_match = re.search(r'(\d{8})', filename)
         receipt_date = None
         if date_match:
             try:
-                date_str = date_match.group(1)
-                receipt_date = datetime.strptime(date_str, '%Y%m%d').date()
-            except:
+                receipt_date = datetime.strptime(date_match.group(1), '%Y%m%d').date()
+            except Exception:
                 pass
         
         return {
-            'raw_text': f'Receipt processing temporarily unavailable. OpenAI servers experiencing issues.\nFilename: {filename}',
+            'raw_text': f'Receipt processing temporarily unavailable.\nError: {error_message}\nFilename: {filename}',
             'merchant_name': 'Processing Unavailable',
             'amount': None,
             'date': receipt_date or datetime.now().date(),
             'items': [{
-                'description': 'Receipt processing temporarily unavailable due to OpenAI server issues',
+                'description': 'Receipt processing temporarily unavailable due to server issues',
                 'price': None,
                 'quantity': 1
             }],
             'success': False,
-            'error': f'OpenAI API temporarily unavailable: {error_message}',
+            'error': f'OpenAI API unavailable: {error_message}',
             'method': 'fallback',
-            'note': 'Please try again later when OpenAI servers are fully operational'
+            'note': 'Please try again later'
         }
 
     def process_receipt(self, image_path: str) -> Dict:
-        """Main method to process a receipt image using OpenAI Vision API."""
+        """Main method to process a receipt image/PDF using OpenAI Vision API."""
         logger.info(f"Processing receipt: {image_path}")
         
         if not self.openai_client:
@@ -206,122 +251,101 @@ class ReceiptOCRGenAI:
             logger.error(error_msg)
             return self.create_fallback_result(image_path, error_msg)
 
-        # Check if file is a PDF and convert it to image
         converted_image_path = None
-        processing_path = image_path
+        page_image_paths = []
         is_pdf = False
+        page_count = 1
         
         try:
             file_ext = os.path.splitext(image_path)[1].lower()
             if file_ext == '.pdf':
-                logger.info("PDF file detected, converting to image...")
+                logger.info("PDF file detected, converting pages to image(s)...")
                 is_pdf = True
-                converted_image_path = self.convert_pdf_to_image(image_path)
-                processing_path = converted_image_path
-                logger.info(f"Using converted image: {processing_path}")
-
-            # Encode image to base64
-            base64_image = self.encode_image_to_base64(processing_path)
-            
-            # Get file extension to determine MIME type (use processing path for converted PDFs)
-            file_ext = os.path.splitext(processing_path)[1].lower()
-            if file_ext in ['.jpg', '.jpeg']:
-                mime_type = "image/jpeg"
-            elif file_ext == '.png':
-                mime_type = "image/png"
-            elif file_ext == '.gif':
-                mime_type = "image/gif"
-            elif file_ext == '.webp':
-                mime_type = "image/webp"
+                converted_image_path, page_image_paths, page_count = self.convert_pdf_to_images(image_path)
+                logger.info(f"PDF converted: {page_count} page(s). Stitched: {converted_image_path}")
             else:
-                mime_type = "image/jpeg"  # Default
-            
-            logger.info(f"Using MIME type: {mime_type} for file extension: {file_ext}")
+                converted_image_path = image_path
+                page_image_paths = [image_path]
 
-            # Prepare the message for GPT-4 Vision
-            logger.info("Preparing OpenAI Vision API request...")
+            # Build image_url content items for OpenAI message
+            image_content_items = []
             
+            # If multi-page PDF (<= 5 pages), send each page image individually for maximum OCR resolution
+            images_to_send = page_image_paths if (is_pdf and 1 < page_count <= 5) else [converted_image_path]
+            
+            for img_p in images_to_send:
+                base64_img = self.encode_image_to_base64(img_p)
+                ext = os.path.splitext(img_p)[1].lower()
+                mime = "image/png" if ext == '.png' else "image/jpeg"
+                image_content_items.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime};base64,{base64_img}",
+                        "detail": "high"
+                    }
+                })
+
+            prompt_instructions = """Analyze this receipt image (which may have one or multiple pages/parts) and extract all financial and item details in exact JSON format:
+
+{
+    "merchant_name": "name of the business/store",
+    "address": "full street address of the store (e.g. '123 Main St, Reno, NV 89501')",
+    "location": "city and state of the store (e.g. 'Reno, NV' or 'Sparks, NV')",
+    "amount": 15.99,
+    "date": "YYYY-MM-DD",
+    "items": [
+        {
+            "description": "item description",
+            "price": 5.00,
+            "quantity": 1,
+            "sku": "item code/sku if visible, or null",
+            "discount": 0
+        }
+    ],
+    "tax_amount": 1.25,
+    "tax_rate": 8.25,
+    "subtotal": 14.74,
+    "discount_amount": 0,
+    "extra_discount": 0
+}
+
+Important extraction rules:
+1. Extract ALL line items across all visible pages/sections in sequential order.
+2. If quantity is specified (e.g. "3 @ $2.50" or "2 x $5.00"), set quantity and per-unit price correctly.
+3. If an item line begins with a count (e.g. "6 Men's Shoes"), set quantity=6.
+4. Calculate subtotal as sum of (price × quantity) for all items.
+5. tax_amount must be the actual tax charged (0 for tax-exempt or thrift purchases).
+6. Ensure amount (total) equals subtotal + tax_amount - discounts.
+7. Return valid JSON only."""
+
             messages = [
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": """Analyze this receipt image and extract the following information in JSON format:
-
-{
-    "merchant_name": "name of the business/store",
-    "address": "full street address of the store (e.g., '123 Main St, Reno, NV 89501')",
-    "location": "city and state of the store (e.g., 'Reno, NV' or 'Sparks, NV')",
-    "amount": "total amount as a number (e.g., 15.99)",
-    "date": "transaction date in YYYY-MM-DD format",
-    "items": [
-        {
-            "description": "item description",
-            "price": "item price as number",
-            "quantity": "quantity as integer (default 1)",
-            "sku": "item code/sku if visible",
-            "discount": "discount applied to this item as a number (0 if none)"
-        }
-    ],
-    "tax_amount": "tax amount as number (0 if no tax)",
-    "tax_rate": "tax rate as percentage (null if unknown)",
-    "subtotal": "subtotal before tax as number",
-    "discount_amount": "total coupon or discount amount as number (0 if none)",
-    "extra_discount": "any additional receipt-level discount or promo not already in items (0 if none)"
-}
-
-Important guidelines:
-1. Extract ALL items from the receipt with accurate prices
-2. If quantity is mentioned, extract it correctly (e.g., "2 x $5.00" means quantity 2, price $5.00 each)
-3. Calculate subtotal as sum of (price × quantity) for all items
-4. Tax amount should be the actual tax charged, not calculated
-5. For thrift stores or tax-exempt purchases, tax_amount should be 0
-6. Ensure total = subtotal + tax_amount
-7. Use exact text from receipt for descriptions
-8. If no SKU/barcode visible, leave sku as null
-9. When an item line begins with a number followed by the description (e.g., "6  Women's Clothing"), treat that number as the item quantity.
-10. Return valid JSON only, no additional text"""
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{base64_image}",
-                                "detail": "high"
-                            }
-                        }
+                        {"type": "text", "text": prompt_instructions},
+                        *image_content_items
                     ]
                 }
             ]
 
-            logger.info("Sending request to OpenAI Vision API...")
-            raw_response = self.call_openai_with_retry(messages, model="gpt-4o-mini", max_tokens=2000)
+            logger.info(f"Sending vision request ({len(image_content_items)} image(s), {page_count} page(s))...")
+            raw_response = self.call_openai_with_retry(messages, model=self.default_model, max_tokens=2500)
 
-            logger.info("Received response from OpenAI Vision API")
             response_text = (raw_response or '').strip()
-            logger.info(f"Raw response: {response_text[:500]}...")  # Log first 500 chars
+            logger.info(f"Raw response preview: {response_text[:300]}...")
 
-            # Try to extract JSON from the response
             try:
-                # Find JSON in the response
                 start_idx = response_text.find('{')
                 end_idx = response_text.rfind('}') + 1
-                
                 if start_idx != -1 and end_idx > start_idx:
-                    json_str = response_text[start_idx:end_idx]
-                    parsed_data = json.loads(json_str)
-                    logger.info("Successfully parsed JSON response")
+                    parsed_data = json.loads(response_text[start_idx:end_idx])
                 else:
-                    raise ValueError("No JSON found in response")
-                
+                    parsed_data = json.loads(response_text)
             except (json.JSONDecodeError, ValueError) as e:
                 logger.error(f"Failed to parse JSON: {e}")
-                logger.error(f"Raw response: {response_text}")
-                # Return a fallback result
                 return self.create_fallback_result(image_path, f"JSON parsing failed: {str(e)}")
 
-            # Validate and process the extracted data
-            # Infer quantity if missing or 1 but subtotal suggests multiple units
+            # Process items list
             items_list = parsed_data.get('items', [])
             if (
                 items_list
@@ -338,7 +362,6 @@ Important guidelines:
                 except Exception:
                     pass
 
-            # Calculate discount from items if provided
             item_level_discount = 0.0
             for it in items_list:
                 try:
@@ -346,7 +369,6 @@ Important guidelines:
                 except (ValueError, TypeError):
                     pass
 
-            # Add extra receipt discount
             extra_discount_val = float(parsed_data.get('extra_discount', 0) or 0)
             item_level_discount += extra_discount_val
 
@@ -362,50 +384,54 @@ Important guidelines:
                 'tax_rate': parsed_data.get('tax_rate'),
                 'discount_amount': parsed_data.get('discount_amount', 0) or item_level_discount,
                 'subtotal': parsed_data.get('subtotal'),
+                'page_count': page_count,
+                'is_multipage': page_count > 1,
                 'success': True,
-                'method': 'gpt4_vision_pdf' if is_pdf else 'gpt4_vision',
+                'method': f"gpt_vision_{'pdf_' if is_pdf else ''}{page_count}p",
                 'original_filename': os.path.basename(image_path) if is_pdf else None,
-                'converted_filename': os.path.basename(processing_path) if is_pdf else None
+                'converted_filename': os.path.basename(converted_image_path) if is_pdf else None
             }
 
-            # Convert date string to date object if possible
+            # Convert date string to date object
             if result['date']:
                 try:
-                    result['date'] = datetime.strptime(result['date'], '%Y-%m-%d').date()
+                    result['date'] = datetime.strptime(str(result['date']).split('T')[0], '%Y-%m-%d').date()
                 except ValueError:
-                    # Try alternative formats
                     for fmt in ['%m/%d/%Y', '%d/%m/%Y', '%Y/%m/%d']:
                         try:
-                            result['date'] = datetime.strptime(result['date'], fmt).date()
+                            result['date'] = datetime.strptime(str(result['date']), fmt).date()
                             break
                         except ValueError:
                             continue
                     else:
                         result['date'] = datetime.now().date()
 
-            # If we converted a PDF, clean up the original PDF file and update the filename
+            # Clean up original PDF if converted
             if is_pdf and converted_image_path:
-                # Clean up the original PDF file
                 try:
-                    os.remove(image_path)
-                    logger.info(f"Cleaned up original PDF file: {image_path}")
+                    if os.path.exists(image_path) and image_path != converted_image_path:
+                        os.remove(image_path)
+                        logger.info(f"Cleaned up original PDF: {image_path}")
                 except OSError as e:
                     logger.warning(f"Could not remove PDF file {image_path}: {e}")
                 
-                # Update the result to indicate we should save the image filename, not PDF
+                # Clean up individual page temp files if more than 1
+                for p_img in page_image_paths:
+                    if p_img != converted_image_path and os.path.exists(p_img):
+                        try:
+                            os.remove(p_img)
+                        except OSError:
+                            pass
+
                 result['processed_filename'] = os.path.basename(converted_image_path)
 
-            # Heuristic: if discount_amount is 0 but raw response contains coupon/discount value, try to extract
             if (result['discount_amount'] in [None, 0]) and item_level_discount > 0:
                 result['discount_amount'] = item_level_discount
 
-            # ensure discount positive number
             if result['discount_amount'] and result['discount_amount'] < 0:
                 result['discount_amount'] = abs(result['discount_amount'])
 
-            # Heuristic regex fallback
             if not result['discount_amount']:
-                # Look for patterns like "Coupon Savings: -$0.81" or "Savings: $1.23"
                 coupon_match = re.search(r'(?i)(coupon|discount|savings)[^\d]*(?:-|\$)(\d+\.\d{2})', response_text)
                 if coupon_match:
                     try:
@@ -413,7 +439,6 @@ Important guidelines:
                     except ValueError:
                         pass
 
-            # Derive discount from totals if still zero and all parts present
             if (result.get('subtotal') is not None) and (result.get('amount') is not None):
                 try:
                     derived_discount = (result['subtotal'] + (result['tax_amount'] or 0)) - result['amount']
@@ -422,82 +447,7 @@ Important guidelines:
                 except Exception:
                     pass
 
-            # --- Begin unit-price adjustment heuristic ---
-            try:
-                # Approximate gross total (subtotal + discounts + tax) to gauge scale
-                gross_total = 0.0
-                try:
-                    gross_total = float(result.get('amount') or 0) \
-                                 + float(result.get('discount_amount') or 0) \
-                                 + float(result.get('tax_amount') or 0)
-                except Exception:
-                    pass
-
-                items_fixed = False
-                for it in result.get('items', []):
-                    try:
-                        qty = int(it.get('quantity', 1) or 1)
-                        price_val = float(it.get('price')) if it.get('price') is not None else None
-                        if price_val is None or qty <= 1:
-                            continue  # Nothing to fix
-
-                        # Two complementary checks:
-                        #   1. For small/medium receipts, if (price × qty) exceeds ~90% of the gross total, it is suspicious.
-                        #   2. For bigger receipts, keep the original 1.3× guard.
-                        suspicious_large_fraction = gross_total > 0 and (price_val * qty) > gross_total * 0.9
-                        suspicious_large_multiple = gross_total > 0 and (price_val * qty) > gross_total * 1.3
-
-                        if suspicious_large_fraction or suspicious_large_multiple:
-                            new_unit_price = round(price_val / qty, 2)
-                            logger.info(
-                                f"Adjusting price for '{it.get('description', '')}' from {price_val} to {new_unit_price} "
-                                f"based on quantity {qty} and gross_total {gross_total}")
-                            it['price'] = new_unit_price
-                            items_fixed = True
-                    except Exception:
-                        # Skip any item that fails numeric conversion
-                        continue
-
-                # Re-compute subtotal if any adjustments were made
-                if items_fixed:
-                    try:
-                        result['subtotal'] = round(
-                            sum(float(item.get('price', 0)) * int(item.get('quantity', 1)) for item in result['items']), 2
-                        )
-                        # Re-derive discount based on new subtotal
-                        if result.get('amount') is not None:
-                            new_derived_discount = (result['subtotal'] + (result.get('tax_amount') or 0)) - result['amount']
-                            if new_derived_discount >= 0:
-                                result['discount_amount'] = round(new_derived_discount, 2)
-                    except Exception:
-                        pass
-            except Exception as _e:
-                logger.warning(f"Unit-price adjustment heuristic failed: {_e}")
-            # --- End unit-price adjustment heuristic ---
-
-            # --- Final consistency check: align discount with subtotal, tax, and total amount ---
-            try:
-                if (result.get('subtotal') is not None) and (result.get('amount') is not None):
-                    expected_discount = round(
-                        (result['subtotal'] + (result.get('tax_amount') or 0)) - result['amount'], 2
-                    )
-
-                    # Discount should not be negative
-                    if expected_discount < 0:
-                        expected_discount = 0.0
-
-                    current_discount = round(float(result.get('discount_amount') or 0), 2)
-
-                    # If current discount differs significantly (>5¢) from expected, correct it.
-                    if abs(expected_discount - current_discount) > 0.05:
-                        logger.info(
-                            f"Adjusting discount_amount for consistency from {current_discount} to {expected_discount}"
-                        )
-                        result['discount_amount'] = expected_discount
-            except Exception as _e:
-                logger.warning(f"Consistency check failed: {_e}")
-
-            logger.info(f"Processing complete. Success: {result['success']}")
+            logger.info(f"Processing complete for {image_path}. Pages: {page_count}. Success: {result['success']}")
             return result
 
         except Exception as e:
@@ -505,8 +455,7 @@ Important guidelines:
             import traceback
             traceback.print_exc()
             
-            # Clean up converted image if there was an error
-            if converted_image_path and os.path.exists(converted_image_path):
+            if converted_image_path and converted_image_path != image_path and os.path.exists(converted_image_path):
                 try:
                     os.remove(converted_image_path)
                 except OSError:
