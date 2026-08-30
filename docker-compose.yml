@@ -1,13 +1,11 @@
-version: "3.9"
-
 x-app-base: &app-base
   build: .
-  image: receipt-reader:latest
   restart: unless-stopped
 
 services:
   app-dev:
     <<: *app-base
+    image: receipt-reader:dev
     container_name: receipt-reader-dev
     profiles: ["dev"]
     env_file:
@@ -25,6 +23,7 @@ services:
 
   app-prod:
     <<: *app-base
+    image: receipt-reader:prod
     container_name: receipt-reader-prod
     profiles: ["prod"]
     env_file:
