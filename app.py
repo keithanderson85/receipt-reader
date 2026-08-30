@@ -667,15 +667,68 @@ def find_matching_location(address_str, user_id=None):
 @app.route('/locations')
 @login_required
 def locations_page():
-    """Manage known locations."""
+    """Manage known locations with spending statistics."""
     conn = sqlite3.connect('receipts.db')
     cursor = conn.cursor()
     cursor.execute('SELECT id, name, address, category FROM locations WHERE user_id = ? ORDER BY name ASC', (current_user.id,))
     locations = cursor.fetchall()
+    
+    # Calculate spending analytics per known location
+    location_stats = []
+    current_year = datetime.now().strftime('%Y')
+    current_month = datetime.now().strftime('%m')
+    
+    for loc in locations:
+        loc_id, name, address, category = loc
+        
+        # All-time spend
+        cursor.execute('''
+            SELECT COUNT(*), COALESCE(SUM(amount), 0)
+            FROM expenses
+            WHERE user_id = ? AND (
+                merchant_name LIKE ? OR 
+                (address IS NOT NULL AND address != '' AND address LIKE ?)
+            )
+        ''', (current_user.id, f'%{name}%', f'%{address[:15]}%' if address else 'NONE'))
+        all_time_count, all_time_total = cursor.fetchone()
+        
+        # This year spend
+        cursor.execute('''
+            SELECT COUNT(*), COALESCE(SUM(amount), 0)
+            FROM expenses
+            WHERE user_id = ? AND strftime('%Y', date) = ? AND (
+                merchant_name LIKE ? OR 
+                (address IS NOT NULL AND address != '' AND address LIKE ?)
+            )
+        ''', (current_user.id, current_year, f'%{name}%', f'%{address[:15]}%' if address else 'NONE'))
+        year_count, year_total = cursor.fetchone()
+        
+        # This month spend
+        cursor.execute('''
+            SELECT COUNT(*), COALESCE(SUM(amount), 0)
+            FROM expenses
+            WHERE user_id = ? AND strftime('%Y', date) = ? AND strftime('%m', date) = ? AND (
+                merchant_name LIKE ? OR 
+                (address IS NOT NULL AND address != '' AND address LIKE ?)
+            )
+        ''', (current_user.id, current_year, current_month, f'%{name}%', f'%{address[:15]}%' if address else 'NONE'))
+        month_count, month_total = cursor.fetchone()
+        
+        location_stats.append({
+            'id': loc_id,
+            'name': name,
+            'address': address,
+            'category': category,
+            'all_time_count': all_time_count,
+            'all_time_total': all_time_total,
+            'year_total': year_total,
+            'month_total': month_total
+        })
+        
     conn.close()
     
     form = LocationForm()
-    return render_template('locations.html', locations=locations, form=form)
+    return render_template('locations.html', locations=location_stats, form=form, current_year=current_year)
 
 @app.route('/locations/add', methods=['POST'])
 @login_required
@@ -1142,6 +1195,9 @@ def view_expenses():
     category_filter = request.args.get('category', '')
     year_filter = request.args.get('year', '')
     month_filter = request.args.get('month', '')
+    start_date = request.args.get('start_date', '')
+    end_date = request.args.get('end_date', '')
+    location_filter = request.args.get('location', '')
     search_query = request.args.get('q', '')
     sort_by = request.args.get('sort', 'date_desc')  # Default sort
     
@@ -1171,6 +1227,18 @@ def view_expenses():
     if month_filter:
         conditions.append('strftime("%m", e.date) = ?')
         params.append(f"{int(month_filter):02d}")
+
+    if start_date:
+        conditions.append('e.date >= ?')
+        params.append(start_date)
+
+    if end_date:
+        conditions.append('e.date <= ?')
+        params.append(end_date)
+
+    if location_filter:
+        conditions.append('(e.merchant_name LIKE ? OR e.location LIKE ? OR e.address LIKE ?)')
+        params.extend([f'%{location_filter}%', f'%{location_filter}%', f'%{location_filter}%'])
     
     if search_query:
         conditions.append('e.merchant_name LIKE ?')
@@ -1210,6 +1278,10 @@ def view_expenses():
         month_num = int(row[0])
         month_name = datetime(2000, month_num, 1).strftime('%B')
         available_months.append((row[0], f"{month_name} {row[1]}"))
+
+    # Fetch user's saved locations for the location filter dropdown
+    cursor.execute('SELECT name FROM locations WHERE user_id = ? ORDER BY name ASC', (current_user.id,))
+    known_locations = [row[0] for row in cursor.fetchall()]
     
     conn.close()
     
@@ -1218,9 +1290,13 @@ def view_expenses():
                          categories=EXPENSE_CATEGORIES,
                          available_years=available_years,
                          available_months=available_months,
+                         known_locations=known_locations,
                          current_category=category_filter,
                          current_year=year_filter,
                          current_month=month_filter,
+                         current_start_date=start_date,
+                         current_end_date=end_date,
+                         current_location=location_filter,
                          current_sort=sort_by,
                          current_search=search_query)
 
@@ -1231,16 +1307,18 @@ def export_expenses(format):
     year = request.args.get('year')
     category = request.args.get('category')
     month = request.args.get('month')
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    location = request.args.get('location')
     search_query = request.args.get('q')
     
     conn = sqlite3.connect('receipts.db')
     
     # Build query (always filter by current user)
-    query = 'SELECT merchant_name, amount, date, category, description FROM expenses WHERE user_id = ?'
+    query = 'SELECT merchant_name, amount, date, category, description, location, address FROM expenses WHERE user_id = ?'
     params = [current_user.id]
     conditions = []
     
-    # Only add filters if they have a value (not None and not empty string)
     if year:
         conditions.append('strftime("%Y", date) = ?')
         params.append(str(year))
@@ -1252,6 +1330,18 @@ def export_expenses(format):
     if month:
         conditions.append('strftime("%m", date) = ?')
         params.append(f"{int(month):02d}")
+
+    if start_date:
+        conditions.append('date >= ?')
+        params.append(start_date)
+
+    if end_date:
+        conditions.append('date <= ?')
+        params.append(end_date)
+
+    if location:
+        conditions.append('(merchant_name LIKE ? OR location LIKE ? OR address LIKE ?)')
+        params.extend([f'%{location}%', f'%{location}%', f'%{location}%'])
 
     if search_query:
         conditions.append('merchant_name LIKE ?')
@@ -2031,10 +2121,10 @@ def bulk_upload_receipts():
         flash('No valid files could be saved.', 'error')
         return redirect(url_for('bulk_upload_page'))
 
-    # Step 2: Execute OCR tasks in parallel with ThreadPoolExecutor (max 3 workers to stay within rate limits)
+    # Step 2: Execute OCR tasks in parallel with ThreadPoolExecutor (max 2 workers to stay well under TPM/RPM limits)
     review_entries = []
     summary_counts = {'ready': 0, 'duplicate': 0, 'needs_data': 0, 'error': 0}
-    max_workers = min(3, len(upload_tasks))
+    max_workers = min(2, len(upload_tasks))
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_task = {executor.submit(_process_bulk_receipt_task, task): task for task in upload_tasks}

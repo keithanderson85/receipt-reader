@@ -5,13 +5,13 @@
 {% block content %}
 <div class="page-header d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
     <div>
-        <h1 class="mb-1">Known Locations</h1>
-        <p class="text-secondary">Manage addresses for automatic matching and categorization</p>
+        <h1 class="mb-1">Known Locations & Spend</h1>
+        <p class="text-secondary">Track your store expenses per location, month, and year</p>
     </div>
     <div class="d-flex gap-2">
-        <form action="{{ url_for('reprocess_all_locations') }}" method="post" onsubmit="return confirm('This will scan all your existing receipts. If an address matches one of these locations, the receipt will be renamed to match. Proceed?')">
+        <form action="{{ url_for('reprocess_all_locations') }}" method="post" onsubmit="return confirm('This will scan all your past receipts. If an address matches one of these locations, the receipt will be renamed to match. Proceed?')">
             <button type="submit" class="btn btn-outline-primary">
-                <i class="bi bi-arrow-repeat me-1"></i> Reprocess & Rename All
+                <i class="bi bi-arrow-repeat me-1"></i> Reprocess & Rename Past Receipts
             </button>
         </form>
         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLocationModal">
@@ -20,15 +20,18 @@
     </div>
 </div>
 
-<div class="card shadow-sm">
+<div class="card shadow-sm border-0">
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
                 <thead class="bg-light">
                     <tr>
-                        <th class="ps-3">Name</th>
+                        <th class="ps-3 py-3">Location Name</th>
                         <th>Address</th>
                         <th>Default Category</th>
+                        <th class="text-end">This Month</th>
+                        <th class="text-end">{{ current_year }} Spend</th>
+                        <th class="text-end">All-Time Spend</th>
                         <th class="text-end pe-3">Actions</th>
                     </tr>
                 </thead>
@@ -36,18 +39,43 @@
                     {% if locations %}
                         {% for loc in locations %}
                         <tr>
-                            <td class="ps-3 fw-bold">{{ loc[1] }}</td>
-                            <td><small class="text-muted">{{ loc[2] }}</small></td>
+                            <td class="ps-3 py-3">
+                                <a href="{{ url_for('view_expenses', location=loc.name) }}" class="fw-bold text-dark text-decoration-none hover-primary">
+                                    <i class="bi bi-geo-alt-fill text-danger me-1"></i> {{ loc.name }}
+                                </a>
+                                <div class="small text-muted">{{ loc.all_time_count }} receipts</div>
+                            </td>
+                            <td><small class="text-muted">{{ loc.address }}</small></td>
                             <td>
-                                {% if loc[3] %}
-                                    <span class="category-tag cat-{{ loc[3] }}">{{ loc[3]|replace('_', ' ')|title }}</span>
+                                {% if loc.category %}
+                                    <span class="category-tag cat-{{ loc.category }}">{{ loc.category|replace('_', ' ')|title }}</span>
                                 {% else %}
                                     <span class="text-muted small">None</span>
                                 {% endif %}
                             </td>
+                            <td class="text-end fw-semibold">
+                                {% if loc.month_total > 0 %}
+                                    <span class="text-success">${{ "%.2f"|format(loc.month_total) }}</span>
+                                {% else %}
+                                    <span class="text-muted">$0.00</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end fw-semibold">
+                                {% if loc.year_total > 0 %}
+                                    <span class="text-primary">${{ "%.2f"|format(loc.year_total) }}</span>
+                                {% else %}
+                                    <span class="text-muted">$0.00</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end fw-bold">
+                                ${{ "%.2f"|format(loc.all_time_total) }}
+                            </td>
                             <td class="text-end pe-3">
-                                <form action="{{ url_for('delete_location', location_id=loc[0]) }}" method="post" class="d-inline" onsubmit="return confirm('Delete this location?')">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <a href="{{ url_for('view_expenses', location=loc.name) }}" class="btn btn-sm btn-outline-secondary me-1" title="View all expenses for this location">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                <form action="{{ url_for('delete_location', location_id=loc.id) }}" method="post" class="d-inline" onsubmit="return confirm('Delete this location?')">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete Location">
                                         <i class="bi bi-trash"></i>
                                     </button>
                                 </form>
@@ -56,9 +84,9 @@
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="4" class="text-center py-5 text-muted">
+                            <td colspan="7" class="text-center py-5 text-muted">
                                 <i class="bi bi-geo-alt d-block mb-2" style="font-size: 2rem; opacity: 0.3;"></i>
-                                <p>No locations saved yet. Add one to start auto-matching!</p>
+                                <p>No locations saved yet. Add one to start auto-matching and tracking location spend!</p>
                             </td>
                         </tr>
                     {% endif %}
@@ -81,17 +109,17 @@
                     {{ form.hidden_tag() }}
                     <div class="mb-3">
                         {{ form.name.label(class="form-label") }}
-                        {{ form.name(class="form-control", placeholder="e.g. Reno Warehouse") }}
+                        {{ form.name(class="form-control", placeholder="e.g. Metro Pawn Oddie") }}
                     </div>
                     <div class="mb-3">
                         {{ form.address.label(class="form-label") }}
-                        {{ form.address(class="form-control", placeholder="123 Main St, Reno, NV 89501") }}
-                        <div class="form-text small">Copy-paste the exact address from a past receipt for best matching.</div>
+                        {{ form.address(class="form-control", placeholder="2625 Oddie Blvd, Reno, NV 89512") }}
+                        <div class="form-text small">Copy-paste the exact address from a receipt for automatic location recognition.</div>
                     </div>
                     <div class="mb-3">
                         {{ form.category.label(class="form-label") }}
                         {{ form.category(class="form-select") }}
-                        <div class="form-text small">Expenses at this location will automatically use this category.</div>
+                        <div class="form-text small">Expenses matching this location will automatically use this category.</div>
                     </div>
                 </div>
                 <div class="modal-footer">

@@ -81,11 +81,11 @@ class ReceiptOCRGenAI:
             logger.info(f"Converting PDF to image(s): {pdf_path}")
             poppler_path = self._get_poppler_path()
             
-            # Convert all pages from PDF (dpi 200 is optimal balance of OCR clarity & speed)
+            # Convert all pages from PDF (dpi 150 is optimal for fast OCR and low TPM footprint)
             if poppler_path:
-                images = convert_from_path(pdf_path, dpi=200, poppler_path=poppler_path)
+                images = convert_from_path(pdf_path, dpi=150, poppler_path=poppler_path)
             else:
-                images = convert_from_path(pdf_path, dpi=200)
+                images = convert_from_path(pdf_path, dpi=150)
             
             page_count = len(images)
             if page_count == 0:
@@ -144,11 +144,11 @@ class ReceiptOCRGenAI:
             
             file_size = os.path.getsize(image_path)
             
-            # If image is over 15MB, compress with PIL
-            if file_size > 15 * 1024 * 1024:
+            # If image is over 4MB, downscale/compress with PIL
+            if file_size > 4 * 1024 * 1024:
                 logger.info(f"Image large ({file_size / 1024 / 1024:.1f}MB), compressing...")
                 with Image.open(image_path) as img:
-                    img.thumbnail((2400, 2400))
+                    img.thumbnail((1600, 1600))
                     buffer = io.BytesIO()
                     img.save(buffer, format="JPEG", quality=85)
                     return base64.b64encode(buffer.getvalue()).decode('utf-8')
