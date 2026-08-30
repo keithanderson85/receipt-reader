@@ -28,6 +28,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max total request size
+app.config['EBAY_DASHBOARD_URL'] = os.getenv('EBAY_DASHBOARD_URL', '')
+app.config['EBAY_DASHBOARD_API_KEY'] = os.getenv('EBAY_DASHBOARD_API_KEY', '')
 
 # Production settings
 if os.getenv('RAILWAY_ENVIRONMENT'):
@@ -2766,3 +2768,142 @@ def save_item_changes(expense_id):
     except Exception as e:
         app.logger.error(f"Error saving item changes: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/push_receipt/<int:expense_id>', methods=['POST'])
+@login_required
+def push_receipt(expense_id):
+    dashboard_url = app.config.get('EBAY_DASHBOARD_URL', '').strip()
+    if not dashboard_url:
+        return jsonify({'success': False, 'error': 'EBAY_DASHBOARD_URL not configured'}), 503
+
+    conn = sqlite3.connect('receipts.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'SELECT id, merchant_name, location, address, amount, date, category, '
+            'subtotal, tax_amount, tax_rate, discount_amount, file_hash '
+            'FROM expenses WHERE id = ? AND user_id = ?',
+            (expense_id, current_user.id)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'success': False, 'error': 'Expense not found'}), 404
+
+        (exp_id, merchant_name, location, address, amount, date,
+         category, subtotal, tax_amount, tax_rate, discount_amount, file_hash) = row
+
+        cursor.execute(
+            'SELECT description, sku, price, quantity FROM receipt_items WHERE expense_id = ?',
+            (expense_id,)
+        )
+        items = [
+            {'description': r[0], 'sku': r[1], 'price': r[2], 'quantity': r[3]}
+            for r in cursor.fetchall()
+        ]
+    finally:
+        conn.close()
+
+    payload = {
+        'date': date,
+        'merchant_name': merchant_name,
+        'amount': amount,
+        'subtotal': subtotal,
+        'tax_amount': tax_amount,
+        'tax_rate': tax_rate,
+        'discount_amount': discount_amount,
+        'category': category,
+        'address': address,
+        'location': location,
+        'source_id': exp_id,
+        'file_hash': file_hash,
+        'items': items,
+    }
+
+    import requests as _requests
+    try:
+        resp = _requests.post(
+            dashboard_url,
+            json=payload,
+            headers={'X-API-Key': app.config.get('EBAY_DASHBOARD_API_KEY', '')},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        dashboard_id = resp.json().get('id')
+        return jsonify({'success': True, 'dashboard_id': dashboard_id})
+    except _requests.exceptions.RequestException as e:
+        return jsonify({'success': False, 'error': str(e)}), 502
+
+
+@app.route('/api/push_all_receipts', methods=['POST'])
+@login_required
+def push_all_receipts():
+    """Push all receipts for the current user to the eBay dashboard."""
+    dashboard_url = app.config.get('EBAY_DASHBOARD_URL', '').strip()
+    if not dashboard_url:
+        return jsonify({'success': False, 'error': 'EBAY_DASHBOARD_URL not configured'}), 503
+
+    api_key = app.config.get('EBAY_DASHBOARD_API_KEY', '')
+    import requests as _requests
+
+    conn = sqlite3.connect('receipts.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'SELECT id, merchant_name, location, address, amount, date, category, '
+            'subtotal, tax_amount, tax_rate, discount_amount, file_hash '
+            'FROM expenses WHERE user_id = ? ORDER BY date DESC',
+            (current_user.id,)
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    pushed = 0
+    skipped = 0
+    errors = []
+
+    for row in rows:
+        (exp_id, merchant_name, location, address, amount, date,
+         category, subtotal, tax_amount, tax_rate, discount_amount, file_hash) = row
+
+        conn2 = sqlite3.connect('receipts.db')
+        c2 = conn2.cursor()
+        try:
+            c2.execute(
+                'SELECT description, sku, price, quantity FROM receipt_items WHERE expense_id = ?',
+                (exp_id,)
+            )
+            items = [{'description': r[0], 'sku': r[1], 'price': r[2], 'quantity': r[3]}
+                     for r in c2.fetchall()]
+        finally:
+            conn2.close()
+
+        payload = {
+            'date': date, 'merchant_name': merchant_name, 'amount': amount,
+            'subtotal': subtotal, 'tax_amount': tax_amount, 'tax_rate': tax_rate,
+            'discount_amount': discount_amount, 'category': category,
+            'address': address, 'location': location,
+            'source_id': exp_id, 'file_hash': file_hash, 'items': items,
+        }
+        try:
+            resp = _requests.post(
+                dashboard_url, json=payload,
+                headers={'X-API-Key': api_key}, timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if resp.status_code == 200:
+                skipped += 1  # duplicate
+            else:
+                pushed += 1
+        except Exception as e:
+            errors.append(f"receipt {exp_id}: {e}")
+
+    return jsonify({
+        'success': True,
+        'pushed': pushed,
+        'skipped_duplicates': skipped,
+        'errors': errors,
+        'total': len(rows),
+    })

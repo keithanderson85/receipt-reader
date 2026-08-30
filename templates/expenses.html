@@ -24,10 +24,42 @@
         <h1>Expenses</h1>
         <p>View and manage your business expenses</p>
     </div>
-    <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-primary">
-        <i class="bi bi-plus-lg me-1"></i> Add Receipts
-    </a>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i> Add Receipts
+        </a>
+        <button class="btn btn-outline-secondary" id="pushAllBtn" onclick="pushAllToDashboard()">
+            <i class="bi bi-send me-1"></i> Sync to Dashboard
+        </button>
+    </div>
 </div>
+<script>
+function pushAllToDashboard() {
+    const btn = document.getElementById('pushAllBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Syncing...';
+    fetch('/api/push_all_receipts', {
+        method: 'POST',
+        headers: {'X-CSRFToken': '{{ csrf_token() if csrf_token is defined else "" }}'},
+        credentials: 'same-origin'
+    })
+    .then(r => r.json())
+    .then(data => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-send me-1"></i> Sync to Dashboard';
+        if (data.success) {
+            alert(`Done! Pushed: ${data.pushed}, Duplicates skipped: ${data.skipped_duplicates}, Errors: ${data.errors.length}`);
+        } else {
+            alert('Error: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(e => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-send me-1"></i> Sync to Dashboard';
+        alert('Request failed: ' + e);
+    });
+}
+</script>
 
 <!-- Year Filter Pills -->
 <div class="year-filter">

@@ -48,6 +48,9 @@ venv.bak/
 
 # Uploads folder (contains user-uploaded receipts)
 uploads/
+bulk_reviews/
+backups/
+poppler/
 
 # IDE
 .vscode/
