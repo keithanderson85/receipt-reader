@@ -4,10 +4,10 @@
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-lg-8">
+    <div class="col-lg-10">
 
         {% if pending_review %}
-        <div class="alert alert-warning d-flex align-items-center justify-content-between mb-3">
+        <div class="alert alert-warning d-flex align-items-center justify-content-between mb-4 shadow-sm">
             <div>
                 <i class="bi bi-exclamation-triangle-fill me-2"></i>
                 <strong>Interrupted upload found</strong> — {{ pending_review.count }} receipt(s) were processed before the session ended.
@@ -18,56 +18,72 @@
         </div>
         {% endif %}
 
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-cloud-upload"></i> Bulk Upload Receipts</h5>
-                <small class="text-muted">Upload multiple receipts at once for automatic processing</small>
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
+                <div>
+                    <h5 class="mb-0 fw-bold"><i class="bi bi-cloud-arrow-up text-primary me-2"></i> Bulk Upload Receipts</h5>
+                    <small class="text-secondary">Upload multiple receipt photos or PDFs for parallel AI extraction</small>
+                </div>
+                <span class="badge bg-primary-subtle text-primary px-3 py-2 rounded-pill"><i class="bi bi-cpu"></i> Concurrent AI OCR</span>
             </div>
-            <div class="card-body">
+            <div class="card-body p-4">
                 <form action="{{ url_for('bulk_upload_receipts') }}" method="post" enctype="multipart/form-data" id="bulkUploadForm">
                     {{ form.hidden_tag() }}
                     
-                    <div class="mb-4">
-                        <label for="files" class="form-label fw-bold">
-                            <i class="bi bi-images"></i> Select Receipt Images
-                        </label>
-                        {{ form.files(class="form-control", id="files", accept=".jpg,.jpeg,.png,.pdf") }}
-                        {% if form.files.errors %}
-                            <div class="text-danger small mt-2">{{ form.files.errors[0] }}</div>
-                        {% endif %}
-                        <div class="form-text">
-                            <i class="bi bi-info-circle"></i>
-                            Select multiple JPG, PNG, or PDF files. Hold Ctrl/Cmd to select multiple files.
-                            <br><strong>Max total size: 100MB</strong> • Individual files should be under 10MB each.
+                    <div class="upload-area p-5 mb-4" id="dropZone" onclick="document.getElementById('files').click()">
+                        <i class="bi bi-images d-block mb-3" style="font-size: 3rem; color: var(--primary-light);"></i>
+                        <h5 class="fw-bold mb-1">Drag & Drop Receipt Files Here</h5>
+                        <p class="text-secondary mb-3">or <span class="text-primary fw-semibold text-decoration-underline">browse your computer</span></p>
+                        <div class="d-inline-flex gap-2">
+                            <span class="badge bg-secondary-subtle text-secondary">JPG / PNG</span>
+                            <span class="badge bg-secondary-subtle text-secondary">PDF (Multi-page auto-stitched)</span>
+                            <span class="badge bg-secondary-subtle text-secondary">Up to 100MB</span>
                         </div>
-                        <div id="fileSizeWarning" class="alert alert-warning mt-2" style="display: none;">
-                            <i class="bi bi-exclamation-triangle"></i> <span id="warningText"></span>
+                        <p id="fileListSummary" class="mt-3 fw-bold text-success" style="display: none;"></p>
+                    </div>
+
+                    {{ form.files(class="d-none", id="files", accept=".jpg,.jpeg,.png,.pdf") }}
+                    
+                    {% if form.files.errors %}
+                        <div class="alert alert-danger mb-3">{{ form.files.errors[0] }}</div>
+                    {% endif %}
+                    
+                    <div id="fileSizeWarning" class="alert alert-warning mb-3" style="display: none;">
+                        <i class="bi bi-exclamation-triangle"></i> <span id="warningText"></span>
+                    </div>
+
+                    <!-- File Thumbnail / List Preview -->
+                    <div class="card mb-4 border bg-light" id="previewContainer" style="display: none;">
+                        <div class="card-header bg-transparent d-flex justify-content-between align-items-center py-2">
+                            <span class="fw-semibold small"><i class="bi bi-file-earmark-check me-1"></i> Selected Files (<span id="selectedCount">0</span>)</span>
+                            <button type="button" class="btn btn-sm btn-link text-danger p-0 text-decoration-none" id="clearFilesBtn">Clear all</button>
+                        </div>
+                        <div class="card-body py-2 px-3">
+                            <div id="filePreview" class="d-flex flex-wrap gap-2 py-1" style="max-height: 140px; overflow-y: auto;"></div>
                         </div>
                     </div>
                     
-                    <!-- Bulk Settings -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h6 class="mb-0"><i class="bi bi-gear"></i> Bulk Processing Options</h6>
+                    <!-- Bulk Settings Accordion / Options -->
+                    <div class="card mb-4 border">
+                        <div class="card-header bg-transparent py-2.5">
+                            <span class="fw-semibold small text-secondary"><i class="bi bi-sliders me-1"></i> Optional Batch Defaults (Applies to unrecognized items)</span>
                         </div>
                         <div class="card-body">
-                            <div class="row">
+                            <div class="row g-3">
                                 <div class="col-md-6">
-                                    <label for="default_merchant" class="form-label">
-                                        <i class="bi bi-shop"></i> Default Merchant Name
+                                    <label for="default_merchant" class="form-label small fw-semibold">
+                                        Default Merchant Name
                                     </label>
                                     <input type="text" class="form-control" id="default_merchant" name="default_merchant" 
-                                           placeholder="e.g., Amazon.com, Walmart, etc.">
-                                    <div class="form-text">
-                                        Will be used for receipts where merchant name cannot be detected automatically.
-                                    </div>
+                                           placeholder="e.g. Metro Pawn, Goodwill, Home Depot">
+                                    <div class="form-text small">Fallback if merchant is not readable in receipt.</div>
                                 </div>
                                 <div class="col-md-6">
-                                    <label for="default_category" class="form-label">
-                                        <i class="bi bi-tag"></i> Default Category
+                                    <label for="default_category" class="form-label small fw-semibold">
+                                        Default Category
                                     </label>
                                     <select class="form-select" id="default_category" name="default_category">
-                                        <option value="">Auto-detect based on merchant</option>
+                                        <option value="">Auto-detect category from merchant (Recommended)</option>
                                         <option value="inventory">Inventory (Items for Resale)</option>
                                         <option value="office_supplies">Office Supplies</option>
                                         <option value="travel">Travel & Transportation</option>
@@ -80,98 +96,34 @@
                                         <option value="insurance">Insurance</option>
                                         <option value="other">Other Business Expenses</option>
                                     </select>
-                                    <div class="form-text">
-                                        Override automatic categorization with this category for all receipts.
-                                    </div>
+                                    <div class="form-text small">Override automatic categorization.</div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    
-                    <div class="row" id="previewContainer" style="display: none;">
-                        <div class="col-12">
-                            <h6><i class="bi bi-eye"></i> Selected Files:</h6>
-                            <div id="filePreview" class="d-flex flex-wrap gap-2 mb-3"></div>
-                        </div>
-                    </div>
-                    
-                    <div class="alert alert-info">
-                        <h6><i class="bi bi-robot"></i> Automatic Processing</h6>
-                        <ul class="mb-0">
-                            <li><strong>GPT-4 Vision</strong> will analyze each receipt automatically</li>
-                            <li><strong>Smart categorization</strong> based on merchant type</li>
-                            <li><strong>Auto-save</strong> receipts with complete data</li>
-                            <li><strong>Manual review</strong> required for incomplete extractions</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="alert alert-warning">
-                        <h6><i class="bi bi-exclamation-triangle"></i> Upload Limits & Cost</h6>
-                        <ul class="mb-0">
-                            <li><strong>Max total size:</strong> 100MB per upload batch</li>
-                            <li><strong>Max per file:</strong> 10MB recommended for best performance</li>
-                            <li><strong>Processing cost:</strong> ~$0.01-0.03 per receipt using GPT-4 Vision</li>
-                        </ul>
-                        <small class="text-muted">10 receipts ≈ $0.10-0.30 • 50 receipts ≈ $0.50-1.50</small>
-                    </div>
-                    
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary me-md-2">
-                            <i class="bi bi-arrow-left"></i> Back
+
+                    <div class="d-flex justify-content-between align-items-center pt-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left me-1"></i> Back to Dashboard
                         </a>
-                        {{ form.submit(class="btn btn-primary btn-lg", id="uploadBtn", disabled=True) }}
+                        <button type="submit" class="btn btn-primary btn-lg px-4" id="uploadBtn" disabled>
+                            <i class="bi bi-lightning-charge-fill me-1"></i> Upload & Process Receipts
+                        </button>
                     </div>
                 </form>
             </div>
         </div>
         
-        <!-- Processing Status (hidden initially) -->
-        <div class="card mt-4" id="processingCard" style="display: none;">
-            <div class="card-header">
-                <h6 class="mb-0"><i class="bi bi-gear-fill"></i> Processing Receipts...</h6>
-            </div>
-            <div class="card-body">
-                <div class="progress mb-3">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%" id="progressBar"></div>
+        <!-- Processing Overlay Card -->
+        <div class="card border-0 shadow-lg mt-4" id="processingCard" style="display: none; background: #0f172a; color: #fff;">
+            <div class="card-body text-center py-5">
+                <div class="spinner-border text-primary mb-3" style="width: 3.5rem; height: 3.5rem;" role="status"></div>
+                <h4 class="fw-bold mb-2">Analyzing Receipts in Parallel...</h4>
+                <p class="text-secondary mb-4" id="processingStatus">Sending receipts to OpenAI Vision engine...</p>
+                <div class="progress mx-auto mb-3" style="max-width: 500px; height: 8px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" role="progressbar" style="width: 100%" id="progressBar"></div>
                 </div>
-                <div id="processingStatus">Preparing to process receipts...</div>
-            </div>
-        </div>
-        
-        <!-- Tips Card -->
-        <div class="card mt-4">
-            <div class="card-header">
-                <h6 class="mb-0"><i class="bi bi-lightbulb"></i> Bulk Upload Tips</h6>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6">
-                        <h6 class="fw-bold">Best Results:</h6>
-                        <ul class="small">
-                            <li>Clear, well-lit receipt images</li>
-                            <li>Full receipt visible (no cropping)</li>
-                            <li>Straight orientation (not rotated)</li>
-                            <li>High resolution photos</li>
-                        </ul>
-                    </div>
-                    <div class="col-md-6">
-                        <h6 class="fw-bold">Auto-Categories:</h6>
-                        <ul class="small">
-                            <li><strong>Inventory:</strong> Pawn shops, estate sales, auctions</li>
-                            <li><strong>Travel:</strong> Gas stations, Uber, hotels</li>
-                            <li><strong>Meals:</strong> Restaurants, cafes</li>
-                            <li><strong>Office:</strong> Amazon, Staples, Office Depot</li>
-                        </ul>
-                        
-                        <h6 class="fw-bold mt-3">Large Batches:</h6>
-                        <ul class="small">
-                            <li>Upload 20-30 receipts at a time</li>
-                            <li>Compress images if over 10MB each</li>
-                            <li>Use JPG format for smaller file sizes</li>
-                            <li>Check your internet connection</li>
-                        </ul>
-                    </div>
-                </div>
+                <small class="text-secondary"><i class="bi bi-info-circle me-1"></i> Multi-page receipts are automatically stitched and OCR'd. Do not close this window.</small>
             </div>
         </div>
     </div>
@@ -194,6 +146,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const maxFileSize = 10 * 1024 * 1024; // 10MB per file
         const fileSizeWarning = document.getElementById('fileSizeWarning');
         const warningText = document.getElementById('warningText');
+        const fileListSummary = document.getElementById('fileListSummary');
+        const selectedCount = document.getElementById('selectedCount');
         
         if (files.length > 0) {
             let totalSize = 0;
@@ -207,54 +161,58 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             
-            // Check for size issues and handle warnings
             if (totalSize > maxTotalSize) {
-                // Total size too big - block upload
                 warningText.innerHTML = `Total file size (${(totalSize / 1024 / 1024).toFixed(1)}MB) exceeds 100MB limit. Please select fewer files.`;
                 fileSizeWarning.style.display = 'block';
                 uploadBtn.disabled = true;
                 uploadBtn.innerHTML = '<i class="bi bi-x-circle"></i> Files Too Large';
             } else {
-                // Total size is OK - enable upload
                 uploadBtn.disabled = false;
-                uploadBtn.innerHTML = `<i class="bi bi-cloud-upload"></i> Process ${files.length} Receipt${files.length > 1 ? 's' : ''} (${(totalSize / 1024 / 1024).toFixed(1)}MB)`;
-                
-                if (oversizedFiles.length > 0) {
-                    // Show warning but allow upload
-                    warningText.innerHTML = `These files are over 10MB each: ${oversizedFiles.join(', ')}. Consider compressing them for faster upload.`;
-                    fileSizeWarning.style.display = 'block';
-                } else {
-                    // No warnings needed
-                    fileSizeWarning.style.display = 'none';
-                }
+                uploadBtn.innerHTML = `<i class="bi bi-lightning-charge-fill me-1"></i> Process ${files.length} Receipt${files.length > 1 ? 's' : ''} (${(totalSize / 1024 / 1024).toFixed(1)}MB)`;
+                fileSizeWarning.style.display = 'none';
             }
             
             // Show preview
             previewContainer.style.display = 'block';
             filePreview.innerHTML = '';
+            if (selectedCount) selectedCount.textContent = files.length;
+            if (fileListSummary) {
+                fileListSummary.style.display = 'block';
+                fileListSummary.innerHTML = `<i class="bi bi-check2-circle"></i> Ready to process ${files.length} receipt file(s)`;
+            }
             
-            for (let i = 0; i < Math.min(files.length, 10); i++) {
+            for (let i = 0; i < Math.min(files.length, 12); i++) {
                 const file = files[i];
+                const isPdf = file.name.toLowerCase().endsWith('.pdf');
                 const badge = document.createElement('span');
-                const isOversized = file.size > maxFileSize;
-                badge.className = isOversized ? 'badge bg-warning' : 'badge bg-secondary';
-                badge.innerHTML = `<i class="bi bi-file-image"></i> ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB)`;
+                badge.className = 'badge bg-white border text-dark p-2 d-inline-flex align-items-center shadow-xs';
+                badge.innerHTML = `<i class="bi ${isPdf ? 'bi-file-earmark-pdf text-danger' : 'bi-file-earmark-image text-primary'} me-1"></i> <span class="text-truncate" style="max-width: 180px;">${file.name}</span> <span class="text-muted ms-1 small">(${(file.size / 1024 / 1024).toFixed(1)}MB)</span>`;
                 filePreview.appendChild(badge);
             }
             
-            if (files.length > 10) {
+            if (files.length > 12) {
                 const moreBadge = document.createElement('span');
-                moreBadge.className = 'badge bg-info';
-                moreBadge.innerHTML = `+${files.length - 10} more...`;
+                moreBadge.className = 'badge bg-primary-subtle text-primary p-2 align-self-center';
+                moreBadge.innerHTML = `+${files.length - 12} more files`;
                 filePreview.appendChild(moreBadge);
             }
         } else {
             uploadBtn.disabled = true;
-            uploadBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Upload and Process All';
+            uploadBtn.innerHTML = '<i class="bi bi-lightning-charge-fill me-1"></i> Upload & Process Receipts';
             previewContainer.style.display = 'none';
             fileSizeWarning.style.display = 'none';
+            if (fileListSummary) fileListSummary.style.display = 'none';
         }
     });
+
+    const clearFilesBtn = document.getElementById('clearFilesBtn');
+    if (clearFilesBtn) {
+        clearFilesBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            fileInput.value = '';
+            fileInput.dispatchEvent(new Event('change'));
+        });
+    }
     
     bulkUploadForm.addEventListener('submit', function() {
         // Show processing UI
