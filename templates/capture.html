@@ -53,6 +53,11 @@
     <input type="file" id="cameraInput" accept="image/*" capture="environment" class="d-none">
     <input type="file" id="galleryInput" accept="image/jpeg,image/png" multiple class="d-none">
 
+    <div class="form-check form-switch mb-3 ms-1">
+        <input class="form-check-input" type="checkbox" role="switch" id="autocropToggle" checked>
+        <label class="form-check-label small" for="autocropToggle">Auto-crop to the receipt <span class="text-muted">(trims the background)</span></label>
+    </div>
+
     <div id="notice" class="alert alert-warning py-2 small d-none" role="alert"></div>
     <div id="photoList" class="d-grid gap-2"></div>
 
@@ -246,6 +251,7 @@
             ? `Reading ${photos.length} photos as one receipt…` : 'Reading receipt…';
 
         const fd = new FormData($('csrfForm'));
+        fd.append('autocrop', $('autocropToggle').checked ? '1' : '0');
         photos.forEach((p, i) => fd.append('photos', p.blob, `photo_${i + 1}.jpg`));
 
         try {
@@ -260,6 +266,11 @@
             showOverlayError('Network error - check your connection and try again.');
         }
     });
+
+    // remember the auto-crop choice on this phone
+    const cropToggle = $('autocropToggle');
+    try { if (localStorage.getItem('autocrop') === '0') cropToggle.checked = false; } catch (e) {}
+    cropToggle.addEventListener('change', () => { try { localStorage.setItem('autocrop', cropToggle.checked ? '1' : '0'); } catch (e) {} });
 
     render();
 })();

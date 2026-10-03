@@ -17,6 +17,7 @@ from wtforms.validators import DataRequired, NumberRange, Length, Optional
 from werkzeug.utils import secure_filename
 import pandas as pd
 from receipt_ocr_genai import ReceiptOCRGenAI
+from receipt_crop import auto_crop_file
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 import json
@@ -1114,6 +1115,7 @@ def capture_process():
     if len(uploads) > MAX_CAPTURE_PHOTOS:
         return jsonify({'success': False, 'error': f'Up to {MAX_CAPTURE_PHOTOS} photos per receipt.'}), 400
 
+    autocrop = request.form.get('autocrop', '1') != '0'
     batch = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     photo_paths, photo_hashes, notes, cleanup = [], [], [], []
 
@@ -1136,6 +1138,11 @@ def capture_process():
                 continue
             photo_hashes.append(digest)
             photo_paths.append(path)
+
+            # Crop after hashing so duplicate detection always compares the untouched upload
+            if autocrop and auto_crop_file(path).missed:
+                notes.append({'level': 'info',
+                              'message': f"Couldn't find the receipt edges in photo {position} - used the full photo."})
 
         if len(photo_paths) == 1:
             ocr_result = receipt_ocr.process_receipt(photo_paths[0])
