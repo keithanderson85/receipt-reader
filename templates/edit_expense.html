@@ -1,794 +1,435 @@
 {% extends "base.html" %}
 
-{% block title %}Review & Edit Expense - Receipt Reader{% endblock %}
+{% block title %}{% if editing %}Edit Expense{% else %}Review Receipt{% endif %} - Receipt Reader{% endblock %}
+
+{# Focused flow: hide the bottom tab bar so the Save bar owns the bottom edge #}
+{% block bottom_nav %}{% endblock %}
 
 {% block content %}
+{# ---- prefill values -------------------------------------------------- #}
+{% set items = ocr_result.get('items') or [] %}
 {% set subtotal_prefill = ocr_result.get('subtotal') %}
-{% if not subtotal_prefill and ocr_result.get('items') %}
+{% if not subtotal_prefill and items %}
     {% set subtotal_calc = namespace(total=0) %}
-    {% for item in ocr_result['items'] %}
-        {% set item_price = item.price if item.price is not none else 0 %}
-        {% set item_qty = item.quantity if item.quantity is not none else 1 %}
-        {% set subtotal_calc.total = subtotal_calc.total + (item_price * item_qty) %}
+    {% for item in items %}
+        {% set subtotal_calc.total = subtotal_calc.total + ((item.price if item.price is not none else 0) * (item.quantity if item.quantity is not none else 1)) %}
     {% endfor %}
     {% set subtotal_prefill = subtotal_calc.total %}
 {% endif %}
-{% set subtotal_value = '' %}
-{% if subtotal_prefill not in (None, '') %}
-    {% set subtotal_value = "%.2f"|format(subtotal_prefill|float) %}
-{% endif %}
-{% set discount_value = '' %}
-{% if ocr_result.get('discount_amount') not in (None, '') %}
-    {% set discount_value = "%.2f"|format(ocr_result.get('discount_amount')|float) %}
-{% endif %}
-{% set tax_value = '' %}
-{% if ocr_result.get('tax_amount') not in (None, '') %}
-    {% set tax_value = "%.2f"|format(ocr_result.get('tax_amount')|float) %}
-{% endif %}
-{% set tax_rate_value = '' %}
-{% if ocr_result.get('tax_rate') not in (None, '') %}
-    {% set tax_rate_value = ocr_result.get('tax_rate') %}
-{% endif %}
+{% set subtotal_value = "%.2f"|format(subtotal_prefill|float) if subtotal_prefill not in (None, '') else '' %}
+{% set discount_value = "%.2f"|format(ocr_result.get('discount_amount')|float) if ocr_result.get('discount_amount') not in (None, '') else '' %}
+{% set tax_value = "%.2f"|format(ocr_result.get('tax_amount')|float) if ocr_result.get('tax_amount') not in (None, '') else '' %}
+{% set tax_rate_value = ocr_result.get('tax_rate') if ocr_result.get('tax_rate') not in (None, '') else '' %}
+{% set duplicates = ocr_result.get('duplicates') if not editing else none %}
+{% set has_duplicates = duplicates and (duplicates.exact_file or duplicates.exact_match or duplicates.similar) %}
 
-<style>
-    .section-label {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #e9ecef;
-        padding-bottom: 0.5rem;
-        margin-bottom: 1.5rem;
-    }
-    .section-label small {
-        color: #6c757d;
-    }
-    .summary-column .card {
-        border-radius: 12px;
-    }
-    .summary-sticky {
-        position: sticky;
-        top: 90px;
-        display: flex;
-        flex-direction: column;
-        gap: 1rem;
-    }
-    .mini-stat {
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #6c757d;
-    }
-    .item-list {
-        max-height: 260px;
-        overflow-y: auto;
-    }
-    .item-row {
-        border-bottom: 1px solid #f1f1f1;
-        padding: 0.35rem 0;
-    }
-    .item-row:last-child {
-        border-bottom: none;
-    }
-    .totals-hint {
-        font-size: 0.85rem;
-        color: #6c757d;
-    }
-    .summary-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.2rem 0.75rem;
-        border-radius: 999px;
-        background-color: #f1f3ff;
-        color: #4b53a2;
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
-    .scale-in {
-        animation: scaleIn 0.2s ease-out forwards;
-    }
-    @keyframes scaleIn {
-        from { transform: scale(0.9); opacity: 0; }
-        to { transform: scale(1); opacity: 1; }
-    }
-    @media (max-width: 991px) {
-        .summary-sticky {
-            position: static;
-        }
-    }
-</style>
-
-<div class="row g-4 align-items-start">
-    <div class="col-xl-8 order-2 order-xl-1" id="formColumn">
-        <div class="card shadow-sm" id="primaryFormCard">
-            <div class="card-header">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="mb-0">
-                            {% if editing %}
-                                <i class="bi bi-pencil-square"></i> Edit Expense
-                            {% else %}
-                                <i class="bi bi-check-square"></i> Review & Edit Expense
-                            {% endif %}
-                        </h5>
-                        <small class="text-muted">
-                            {% if editing %}
-                                Tidy up the details below and hit update when ready.
-                            {% else %}
-                                Quick review of the AI results before saving everything.
-                            {% endif %}
-                        </small>
-                    </div>
-                    <span class="summary-pill">
-                        <i class="bi bi-clipboard-check"></i>
-                        {% if editing %}Existing Entry{% else %}New Draft{% endif %}
-                    </span>
-                </div>
-            </div>
-            {% if editing %}
-            <div class="card-body bg-light py-2 border-bottom d-flex justify-content-between align-items-center">
-                <div class="small text-muted">
-                    <i class="bi bi-info-circle"></i> AI extraction not quite right? You can try re-running the processor.
-                </div>
-                <form action="{{ url_for('reprocess_expense', expense_id=expense_id) }}" method="post" class="m-0" onsubmit="return confirm('Note: Reprocessing will use AI credits. It will replace the current draft values with new AI extraction results. Continue?')">
-                    <button type="submit" class="btn btn-sm btn-outline-primary">
-                        <i class="bi bi-arrow-repeat"></i> Reprocess Receipt
-                    </button>
+<div class="d-flex align-items-center gap-2 mb-3">
+    <a href="{% if editing %}{{ url_for('view_expenses') }}{% else %}{{ url_for('index') }}{% endif %}" class="btn btn-outline-secondary btn-sm px-2" aria-label="Back"><i class="bi bi-arrow-left"></i></a>
+    <div class="me-auto">
+        <h1 class="h4 fw-bold mb-0" style="letter-spacing:-.02em;">{% if editing %}Edit expense{% else %}Review receipt{% endif %}</h1>
+        <div class="small text-secondary">
+            {% if editing %}Fix anything the scan got wrong.{% else %}Check the details, then save.{% endif %}
+            {% if ocr_result.get('is_multipage') and ocr_result.get('page_count') %}· read from {{ ocr_result.page_count }} {{ 'photos' if 'photos' in (ocr_result.get('method') or '') else 'pages' }}{% endif %}
+        </div>
+    </div>
+    {% if editing %}
+    <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm px-2" type="button" data-bs-toggle="dropdown" aria-label="More actions"><i class="bi bi-three-dots-vertical"></i></button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="{{ url_for('view_expense_items', expense_id=expense_id) }}"><i class="bi bi-list-check me-2"></i>Item details</a></li>
+            <li>
+                <form action="{{ url_for('reprocess_expense', expense_id=expense_id) }}" method="post" class="m-0" onsubmit="return confirm('Re-scan this receipt with AI? This uses credits and replaces the values below with the new results.')">
+                    <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat me-2"></i>Re-scan receipt</button>
                 </form>
+            </li>
+        </ul>
+    </div>
+    {% endif %}
+</div>
+
+{# ---- notices -------------------------------------------------------- #}
+{% for note in ocr_result.get('photo_notes', []) %}
+<div class="alert alert-{{ 'warning' if note.level == 'warning' else 'info' }} py-2 small mb-2" role="alert">
+    <i class="bi bi-{{ 'exclamation-triangle-fill' if note.level == 'warning' else 'info-circle-fill' }} me-1"></i>{{ note.message }}
+</div>
+{% endfor %}
+
+{% if has_duplicates %}
+<div class="alert alert-warning mb-3" role="alert" id="duplicateWarning">
+    <div class="d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-triangle-fill fs-5 text-danger"></i>
+        <div class="flex-grow-1">
+            <strong>This looks like a receipt you've already saved.</strong>
+            <div class="mt-2 d-grid gap-1">
+                {% for label, rows in (('Same file', duplicates.exact_file), ('Same store, amount and date', duplicates.exact_match), ('Similar', duplicates.similar)) %}
+                    {% for dup in rows %}
+                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" target="_blank" rel="noopener" class="d-flex justify-content-between align-items-center bg-white bg-opacity-75 rounded px-2 py-2 text-decoration-none text-body small">
+                        <span><span class="badge text-bg-light border me-1">{{ label }}</span>{{ dup[1] }} · {{ dup[3] }}</span>
+                        <span class="fw-bold">${{ "%.2f"|format(dup[2]) }}</span>
+                    </a>
+                    {% endfor %}
+                {% endfor %}
             </div>
-            {% endif %}
-            <div class="card-body">
-                <form action="{% if editing %}{{ url_for('update_expense', expense_id=expense_id) }}{% else %}{{ url_for('save_expense') }}{% endif %}" method="post" id="expenseForm">
-                    {{ form.hidden_tag() }}
-                    {{ form.raw_json() }}
-                    <input type="hidden" name="filename" value="{{ filename }}">
-                    {% if ocr_result.file_hash %}
-                    <input type="hidden" name="file_hash" value="{{ ocr_result.file_hash }}">
-                    {% endif %}
-                    {% if ocr_result.get('processed_filename') %}
-                    <input type="hidden" name="processed_filename" value="{{ ocr_result.processed_filename }}">
-                    {% endif %}
-                    {% if ocr_result['items'] %}
-                        {% for item in ocr_result['items'] %}
-                        <input type="hidden" name="item_{{ loop.index0 }}_sku" value="{{ item.sku or '' }}">
-                        <input type="hidden" name="item_{{ loop.index0 }}_description" value="{{ item.description or '' }}">
-                        <input type="hidden" name="item_{{ loop.index0 }}_price" value="{{ item.price or '' }}">
-                        <input type="hidden" name="item_{{ loop.index0 }}_raw_line" value="{{ item.raw_line or '' }}">
-                        {% endfor %}
-                        <input type="hidden" name="items_count" value="{{ ocr_result['items']|length }}">
-                    {% endif %}
-
-                    <div class="section-label">
-                        <div>
-                            <p class="mini-stat mb-1">Step 1</p>
-                            <strong>Expense Details</strong>
-                        </div>
-                        <small>Merchant, totals, and categorization</small>
-                    </div>
-
-                    {% if locations %}
-                    <div class="mb-3">
-                        <label class="form-label fw-bold small text-primary uppercase"><i class="bi bi-magic"></i> Quick Store Selector</label>
-                        <select class="form-select form-select-sm border-primary-subtle bg-primary-subtle bg-opacity-10" id="quickLocationSelect">
-                            <option value="">-- Choose a saved store to auto-fill --</option>
-                            {% for loc in locations %}
-                            <option value="{{ loop.index0 }}" data-name="{{ loc.name }}" data-address="{{ loc.address }}" data-category="{{ loc.category }}">
-                                {{ loc.name }} ({{ loc.address[:30] }}{% if loc.address|length > 30 %}...{% endif %})
-                            </option>
-                            {% endfor %}
-                        </select>
-                        <div class="totals-hint mt-1 text-primary">Picking a store will auto-fill the name, address, and category.</div>
-                    </div>
-                    {% endif %}
-
-                    <div class="mb-3">
-                        {{ form.merchant_name.label(class="form-label fw-bold") }}
-                        {{ form.merchant_name(class="form-control", value=ocr_result['merchant_name'] if ocr_result['merchant_name'] else '') }}
-                        {% if form.merchant_name.errors %}
-                            <div class="text-danger small">{{ form.merchant_name.errors[0] }}</div>
-                        {% endif %}
-                    </div>
-
-                    <div class="mb-3 border rounded p-3 bg-light bg-opacity-50">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            {{ form.address.label(class="form-label fw-bold font-monospace small uppercase mb-0") }}
-                            <div id="locationBadgeContainer">
-                                {% if ocr_result.get('location_match') %}
-                                    <span class="badge rounded-pill bg-info text-dark shadow-sm">
-                                        <i class="bi bi-geo-fill me-1"></i> Matched: {{ ocr_result.location_match.name }}
-                                    </span>
-                                {% endif %}
-                            </div>
-                        </div>
-                        
-                        <div class="mb-2">
-                            {{ form.address(class="form-control shadow-sm", value=ocr_result['address'] if ocr_result['address'] else '', placeholder="e.g. 123 Main St, Reno, NV", style="border-left: 4px solid #0d6efd;") }}
-                            {% if form.address.errors %}
-                                <div class="text-danger small">{{ form.address.errors[0] }}</div>
-                            {% endif %}
-                        </div>
-
-                        <div id="locationActionRow" class="d-flex justify-content-between align-items-center">
-                            <span class="text-muted" style="font-size: 0.75rem;">Full address helps match to store DB</span>
-                            <div id="locationMatchPrompt" {% if not ocr_result['address'] or ocr_result.get('location_match') %}style="display:none;"{% endif %}>
-                                <button type="button" class="btn btn-xs btn-outline-primary py-0 px-2 shadow-sm" id="saveLocationBtn" style="font-size: 0.75rem;">
-                                    <i class="bi bi-plus-circle me-1"></i> Save as new store
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            {{ form.amount.label(class="form-label fw-bold") }}
-                            <div class="input-group">
-                                <span class="input-group-text">$</span>
-                                {{ form.amount(class="form-control", value=ocr_result['amount'] if ocr_result['amount'] else '', step="0.01") }}
-                            </div>
-                            <div class="totals-hint mt-1">Grand total printed on the receipt.</div>
-                            {% if form.amount.errors %}
-                                <div class="text-danger small">{{ form.amount.errors[0] }}</div>
-                            {% endif %}
-                        </div>
-                        <div class="col-md-6">
-                            {{ form.date.label(class="form-label fw-bold") }}
-                            {{ form.date(class="form-control", value=ocr_result['date'] if ocr_result['date'] else '') }}
-                            <div class="totals-hint mt-1">We will flag old dates for you later.</div>
-                            {% if form.date.errors %}
-                                <div class="text-danger small">{{ form.date.errors[0] }}</div>
-                            {% endif %}
-                        </div>
-                    </div>
-
-                    <div class="mt-3">
-                        {{ form.category.label(class="form-label fw-bold") }}
-                        {{ form.category(class="form-select") }}
-                        {% if form.category.errors %}
-                            <div class="text-danger small">{{ form.category.errors[0] }}</div>
-                        {% endif %}
-                    </div>
-
-                    <div class="section-label mt-4">
-                        <div>
-                            <p class="mini-stat mb-1">Step 2</p>
-                            <strong>Totals & Adjustments</strong>
-                        </div>
-                        <small>Fine tune subtotal, tax, and discounts</small>
-                    </div>
-
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            {{ form.subtotal.label(class="form-label fw-bold") }}
-                            <div class="input-group">
-                                <span class="input-group-text">$</span>
-                                {{ form.subtotal(class="form-control", value=subtotal_value, step="0.01") }}
-                            </div>
-                            <div class="totals-hint mt-1">Pretax sum of individual items.</div>
-                        </div>
-                        <div class="col-md-6">
-                            {{ form.tax_amount.label(class="form-label fw-bold") }}
-                            <div class="input-group">
-                                <span class="input-group-text">$</span>
-                                {{ form.tax_amount(class="form-control", value=tax_value, step="0.01") }}
-                            </div>
-                            <div class="totals-hint mt-1">Leave blank if tax was included.</div>
-                        </div>
-                        <div class="col-md-6">
-                            {{ form.discount_amount.label(class="form-label fw-bold") }}
-                            <div class="input-group">
-                                <span class="input-group-text">$</span>
-                                {{ form.discount_amount(class="form-control", value=discount_value, step="0.01") }}
-                            </div>
-                            <div class="totals-hint mt-1">Use a positive number for coupons or returns.</div>
-                        </div>
-                        <div class="col-md-6">
-                            {{ form.tax_rate.label(class="form-label fw-bold") }}
-                            <div class="input-group">
-                                {{ form.tax_rate(class="form-control", value=tax_rate_value, step="0.01", placeholder="e.g. 8.25") }}
-                                <span class="input-group-text">%</span>
-                            </div>
-                            <div class="totals-hint mt-1">Optional reference for future comparisons.</div>
-                        </div>
-                    </div>
-
-                    <div class="section-label mt-4">
-                        <div>
-                            <p class="mini-stat mb-1">Step 3</p>
-                            <strong>Notes</strong>
-                        </div>
-                        <small>Why this purchase matters</small>
-                    </div>
-                    <div class="mb-4">
-                        {{ form.description.label(class="form-label fw-bold") }}
-                        {{ form.description(class="form-control", rows="3", placeholder="Optional: add business purpose, warranty info, etc.") }}
-                        {% if form.description.errors %}
-                            <div class="text-danger small">{{ form.description.errors[0] }}</div>
-                        {% endif %}
-                    </div>
-
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <a href="{% if editing %}{{ url_for('view_expenses') }}{% else %}{{ url_for('index') }}{% endif %}" class="btn btn-outline-secondary me-md-2">
-                            <i class="bi bi-arrow-left"></i> Cancel
-                        </a>
-                        {% if editing %}
-                            <button type="submit" class="btn btn-success btn-lg" id="saveBtn">
-                                <i class="bi bi-check-lg"></i> Update Expense
-                            </button>
-                        {% else %}
-                            {{ form.submit(class="btn btn-primary btn-lg", id="saveBtn") }}
-                        {% endif %}
-                    </div>
-                </form>
+            <div class="d-flex gap-2 mt-3">
+                <button type="button" class="btn btn-warning btn-sm" onclick="proceedAnyway()"><i class="bi bi-check2 me-1"></i>Save anyway</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cancelUpload()"><i class="bi bi-trash me-1"></i>Discard receipt</button>
             </div>
         </div>
     </div>
+</div>
+{% endif %}
 
-    <div class="col-xl-4 order-1 order-xl-2 summary-column">
-        <div class="summary-sticky">
-            {% for note in ocr_result.get('photo_notes', []) %}
-            <div class="alert alert-{{ 'warning' if note.level == 'warning' else 'info' }} shadow-sm py-2 small" role="alert">
-                <i class="bi bi-{{ 'exclamation-triangle-fill' if note.level == 'warning' else 'info-circle-fill' }} me-1"></i>{{ note.message }}
-            </div>
-            {% endfor %}
-            {% if ocr_result.get('duplicates') and not editing %}
-                {% set duplicates = ocr_result.duplicates %}
-                {% if duplicates.exact_file or duplicates.exact_match or duplicates.similar %}
-                <div class="alert alert-warning shadow-sm" role="alert" id="duplicateWarning">
-                    <div class="d-flex align-items-center mb-2">
-                        <i class="bi bi-exclamation-triangle-fill fs-4 text-danger me-2"></i>
-                        <div>
-                            <strong>Possible duplicate detected</strong>
-                            <div class="small">Compare before saving to avoid double counting.</div>
-                        </div>
-                    </div>
-                    <div class="small">
-                        {% if duplicates.exact_file %}
-                            <p class="mb-1 fw-bold">Exact file already uploaded:</p>
-                            {% for dup in duplicates.exact_file %}
-                                <div class="bg-light rounded p-2 mb-1 d-flex justify-content-between align-items-center">
-                                    <span>{{ dup[1] }} · ${{ "%.2f"|format(dup[2]) }} · {{ dup[3] }}</span>
-                                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" class="btn btn-sm btn-outline-primary">View</a>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                        {% if duplicates.exact_match %}
-                            <p class="mt-3 mb-1 fw-bold">Same merchant, amount, and date:</p>
-                            {% for dup in duplicates.exact_match %}
-                                <div class="bg-light rounded p-2 mb-1 d-flex justify-content-between align-items-center">
-                                    <span>{{ dup[1] }} · ${{ "%.2f"|format(dup[2]) }} · {{ dup[3] }}</span>
-                                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" class="btn btn-sm btn-outline-primary">View</a>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                        {% if duplicates.similar %}
-                            <p class="mt-3 mb-1 fw-bold">Similar matches (close date/amount):</p>
-                            {% for dup in duplicates.similar %}
-                                <div class="bg-light rounded p-2 mb-1 d-flex justify-content-between align-items-center">
-                                    <span>{{ dup[1] }} · ${{ "%.2f"|format(dup[2]) }} · {{ dup[3] }}</span>
-                                    <a href="{{ url_for('edit_expense', expense_id=dup[0]) }}" class="btn btn-sm btn-outline-primary">View</a>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                    </div>
-                    <div class="d-grid gap-2 mt-3">
-                        <button type="button" class="btn btn-warning" onclick="proceedAnyway()">
-                            <i class="bi bi-exclamation-triangle"></i> I'm sure – save anyway
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary" onclick="dismissWarning()">
-                            <i class="bi bi-eye-slash"></i> Hide warning
-                        </button>
-                        <button type="button" class="btn btn-light" onclick="cancelUpload()">
-                            <i class="bi bi-x-circle"></i> Cancel and delete file
-                        </button>
-                    </div>
+<div class="review-grid">
+    {# ---- receipt image ---------------------------------------------- #}
+    {% if filename %}
+    <aside class="review-receipt">
+        <div class="card overflow-hidden">
+            <button type="button" class="receipt-preview" data-bs-toggle="modal" data-bs-target="#receiptPreviewModal" aria-label="View full receipt">
+                <img src="{{ url_for('uploaded_file', filename=filename) }}" alt="Receipt" onerror="this.closest('.review-receipt').classList.add('no-image')">
+                <span class="receipt-fade d-lg-none"><i class="bi bi-arrows-fullscreen me-1"></i> Tap to enlarge</span>
+            </button>
+        </div>
+    </aside>
+    {% endif %}
+
+    {# ---- form ------------------------------------------------------- #}
+    <div class="review-form" id="formColumn">
+        <form action="{% if editing %}{{ url_for('update_expense', expense_id=expense_id) }}{% else %}{{ url_for('save_expense') }}{% endif %}" method="post" id="expenseForm" autocomplete="off">
+            {{ form.hidden_tag() }}
+            {{ form.raw_json() }}
+            <input type="hidden" name="filename" value="{{ filename }}">
+            {% if ocr_result.file_hash %}<input type="hidden" name="file_hash" value="{{ ocr_result.file_hash }}">{% endif %}
+            {% if ocr_result.get('processed_filename') %}<input type="hidden" name="processed_filename" value="{{ ocr_result.processed_filename }}">{% endif %}
+
+            {# Details #}
+            <div class="card mb-3"><div class="card-body">
+                <h2 class="section-title">Details</h2>
+
+                {% if locations %}
+                <div class="mb-3">
+                    <label class="form-label" for="quickLocationSelect"><i class="bi bi-magic me-1"></i>Use a saved store</label>
+                    <select class="form-select" id="quickLocationSelect">
+                        <option value="">Choose to auto-fill name, address &amp; category…</option>
+                        {% for loc in locations %}
+                        <option value="{{ loop.index0 }}" data-name="{{ loc.name }}" data-address="{{ loc.address }}" data-category="{{ loc.category }}">{{ loc.name }}{% if loc.address %} – {{ loc.address[:32] }}{% endif %}</option>
+                        {% endfor %}
+                    </select>
                 </div>
                 {% endif %}
+
+                <div class="mb-3">
+                    {{ form.merchant_name.label(class="form-label") }}
+                    {{ form.merchant_name(class="form-control", value=ocr_result['merchant_name'] if ocr_result['merchant_name'] else '', autocapitalize="words") }}
+                    {% if form.merchant_name.errors %}<div class="text-danger small">{{ form.merchant_name.errors[0] }}</div>{% endif %}
+                </div>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-6">
+                        {{ form.amount.label(class="form-label") }}
+                        <div class="input-group">
+                            <span class="input-group-text">$</span>
+                            {{ form.amount(class="form-control fw-bold", value=ocr_result['amount'] if ocr_result['amount'] else '', inputmode="decimal") }}
+                        </div>
+                        {% if form.amount.errors %}<div class="text-danger small">{{ form.amount.errors[0] }}</div>{% endif %}
+                    </div>
+                    <div class="col-6">
+                        {{ form.date.label(class="form-label") }}
+                        {{ form.date(class="form-control", value=ocr_result['date'] if ocr_result['date'] else '') }}
+                        {% if form.date.errors %}<div class="text-danger small">{{ form.date.errors[0] }}</div>{% endif %}
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    {{ form.category.label(class="form-label") }}
+                    {{ form.category(class="form-select") }}
+                    {% if form.category.errors %}<div class="text-danger small">{{ form.category.errors[0] }}</div>{% endif %}
+                </div>
+
+                <div>
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        {{ form.address.label(class="form-label mb-0") }}
+                        <div id="locationBadgeContainer">
+                            {% if ocr_result.get('location_match') %}
+                            <span class="badge rounded-pill text-bg-info"><i class="bi bi-geo-fill me-1"></i>Matched: {{ ocr_result.location_match.name }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {{ form.address(class="form-control", value=ocr_result['address'] if ocr_result['address'] else '', placeholder="123 Main St, Reno, NV") }}
+                    {% if form.address.errors %}<div class="text-danger small">{{ form.address.errors[0] }}</div>{% endif %}
+                    <div id="locationMatchPrompt" class="mt-2" {% if not ocr_result['address'] or ocr_result.get('location_match') %}style="display:none;"{% endif %}>
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="saveLocationBtn"><i class="bi bi-plus-circle me-1"></i>Save as a known store</button>
+                    </div>
+                </div>
+                <input type="hidden" name="location" id="location" value="{{ ocr_result.get('location') or '' }}">
+            </div></div>
+
+            {# Items #}
+            <div class="card mb-3"><div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <h2 class="section-title mb-0">Line items <span class="text-body-secondary" id="itemCount"></span></h2>
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="addItemBtn"><i class="bi bi-plus-lg me-1"></i>Add</button>
+                </div>
+                <div id="itemList">
+                    {% for item in items %}
+                    <div class="item-row" data-item>
+                        <input type="hidden" data-f="sku" value="{{ item.sku or '' }}">
+                        <input type="hidden" data-f="raw_line" value="{{ item.raw_line or '' }}">
+                        <input class="form-control item-desc" data-f="description" value="{{ item.description or '' }}" placeholder="Item description" aria-label="Description">
+                        <button type="button" class="btn btn-light item-del" aria-label="Remove item"><i class="bi bi-x-lg text-danger"></i></button>
+                        <div class="item-nums">
+                            <label class="item-num"><span>Qty</span><input class="form-control" data-f="quantity" inputmode="numeric" value="{{ item.quantity if item.quantity is not none else 1 }}"></label>
+                            <label class="item-num item-price"><span>$</span><input class="form-control" data-f="price" inputmode="decimal" value="{{ '%.2f'|format(item.price) if item.price is not none else '' }}"></label>
+                            <span class="item-line money ms-auto"></span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div id="itemsEmpty" class="text-center text-muted small py-3 {% if items %}d-none{% endif %}">No items read. Add them if you want an itemised record.</div>
+                <div id="itemsCheck" class="items-check mt-2 d-none"></div>
+            </div></div>
+
+            {# Totals #}
+            <div class="card mb-3"><div class="card-body">
+                <h2 class="section-title">Totals</h2>
+                <div class="row g-3">
+                    <div class="col-6">
+                        {{ form.subtotal.label(class="form-label") }}
+                        <div class="input-group"><span class="input-group-text">$</span>{{ form.subtotal(class="form-control", value=subtotal_value, inputmode="decimal") }}</div>
+                    </div>
+                    <div class="col-6">
+                        {{ form.tax_amount.label(class="form-label") }}
+                        <div class="input-group"><span class="input-group-text">$</span>{{ form.tax_amount(class="form-control", value=tax_value, inputmode="decimal") }}</div>
+                    </div>
+                    <div class="col-6">
+                        {{ form.discount_amount.label(class="form-label") }}
+                        <div class="input-group"><span class="input-group-text">$</span>{{ form.discount_amount(class="form-control", value=discount_value, inputmode="decimal") }}</div>
+                    </div>
+                    <div class="col-6">
+                        {{ form.tax_rate.label(class="form-label") }}
+                        <div class="input-group">{{ form.tax_rate(class="form-control", value=tax_rate_value, inputmode="decimal", placeholder="8.25") }}<span class="input-group-text">%</span></div>
+                    </div>
+                </div>
+            </div></div>
+
+            {# Notes #}
+            <div class="card mb-3"><div class="card-body">
+                <h2 class="section-title">Notes</h2>
+                {{ form.description(class="form-control", rows="2", placeholder="Business purpose, warranty info, …", **{'aria-label': 'Notes'}) }}
+                {% if form.description.errors %}<div class="text-danger small">{{ form.description.errors[0] }}</div>{% endif %}
+            </div></div>
+
+            {% if ocr_result.get('raw_text') %}
+            <details class="mb-3 small">
+                <summary class="text-secondary" style="cursor:pointer;">Raw scan data</summary>
+                <pre class="bg-white border rounded p-2 mt-2 mb-0" style="max-height:220px; overflow:auto; white-space:pre-wrap;">{{ ocr_result['raw_text'] }}</pre>
+            </details>
             {% endif %}
 
-            <div class="card shadow-sm">
-                <div class="card-body">
-                    <p class="mini-stat mb-1">Receipt Snapshot</p>
-                    <h5 class="mb-2">{{ ocr_result['merchant_name'] or 'Unknown merchant' }}</h5>
-                    <div class="row g-3">
-                        <div class="col-6">
-                            <div class="text-muted small">Amount</div>
-                            <div class="fw-bold fs-5">{% if ocr_result['amount'] %}${{ "%.2f"|format(ocr_result['amount']) }}{% else %}--{% endif %}</div>
-                        </div>
-                        <div class="col-6">
-                            <div class="text-muted small">Date</div>
-                            <div class="fw-bold">{{ ocr_result['date'] or 'Unknown' }}</div>
-                        </div>
-                        <div class="col-12">
-                            <div class="text-muted small">Processing method</div>
-                            <div class="fw-semibold text-capitalize">{{ ocr_result.get('method', 'manual review')|replace('_', ' ') }}</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="card-footer bg-white border-0">
-                    <div class="d-grid gap-2">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#receiptPreviewModal">
-                            <i class="bi bi-image"></i> View receipt image
-                        </button>
-                        <button type="button" class="btn btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#rawTextCollapse">
-                            <i class="bi bi-eye"></i> Toggle raw text
-                        </button>
-                        <a href="{{ url_for('view_raw_text', filename=filename) }}" class="btn btn-outline-warning" target="_blank">
-                            <i class="bi bi-bug"></i> Debug OCR text
-                        </a>
-                    </div>
-                    <div class="collapse mt-3" id="rawTextCollapse">
-                        <div class="bg-light rounded p-2">
-                            <small class="text-muted font-monospace d-block" style="max-height: 200px; overflow:auto;">{{ ocr_result['raw_text'] }}</small>
-                        </div>
-                    </div>
-                </div>
+            <div class="action-bar">
+                <a href="{% if editing %}{{ url_for('view_expenses') }}{% else %}{{ url_for('index') }}{% endif %}" class="btn btn-outline-secondary btn-tap">Cancel</a>
+                <button type="submit" class="btn {{ 'btn-success' if editing else 'btn-primary' }} btn-tap flex-grow-1" id="saveBtn">
+                    <i class="bi bi-check-lg me-1"></i> {% if editing %}Update expense{% else %}Save expense{% endif %}
+                </button>
             </div>
-
-            {% if ocr_result['items'] and ocr_result['items']|length > 0 %}
-            <div class="card shadow-sm">
-                <div class="card-header bg-light d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-list-check me-1"></i> Line items ({{ ocr_result['items']|length }})</span>
-                    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#itemsCollapse">
-                        Expand
-                    </button>
-                </div>
-                <div class="collapse" id="itemsCollapse">
-                    <div class="card-body item-list">
-                        {% for item in ocr_result['items'] %}
-                            <div class="item-row">
-                                <div class="d-flex justify-content-between">
-                                    <div>
-                                        <div class="fw-semibold text-primary">{{ item.description or 'Item' }}</div>
-                                        <small class="text-muted">
-                                            {% if item.quantity %}Qty {{ item.quantity }} · {% endif %}
-                                            {% if item.sku %}SKU {{ item.sku }}{% else %}No SKU{% endif %}
-                                        </small>
-                                    </div>
-                                    <span class="fw-bold">${{ "%.2f"|format(item.price) if item.price else '0.00' }}</span>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-
-            <div class="card shadow-sm">
-                <div class="card-header bg-light">
-                    <button class="btn btn-link w-100 text-start text-decoration-none" type="button" data-bs-toggle="collapse" data-bs-target="#tipsCollapse">
-                        <i class="bi bi-lightbulb me-2"></i>Business expense reminders
-                    </button>
-                </div>
-                <div class="collapse" id="tipsCollapse">
-                    <div class="card-body">
-                        <h6 class="fw-bold">Common write-offs</h6>
-                        <ul class="small mb-3">
-                            <li>Office supplies and equipment</li>
-                            <li>Business meals (50% deductible)</li>
-                            <li>Travel and transportation</li>
-                            <li>Professional services</li>
-                            <li>Advertising and marketing</li>
-                        </ul>
-                        <h6 class="fw-bold">Documentation tips</h6>
-                        <ul class="small mb-0">
-                            <li>Keep receipts for at least three years.</li>
-                            <li>Record business purpose in the description field.</li>
-                            <li>Separate personal and business expenses.</li>
-                            <li>Export data regularly for your accountant.</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
+        </form>
     </div>
 </div>
 
-<!-- Receipt Preview Modal -->
+{% if filename %}
+<!-- Full receipt viewer -->
 <div class="modal fade" id="receiptPreviewModal" tabindex="-1" aria-labelledby="receiptPreviewModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-md-down modal-lg">
         <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="receiptPreviewModalLabel">Receipt Preview</h5>
+            <div class="modal-header py-2">
+                <h5 class="modal-title fs-6" id="receiptPreviewModalLabel">Receipt</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body text-center">
-                <img src="{{ url_for('uploaded_file', filename=filename) }}" 
-                     class="img-fluid" 
-                     alt="Receipt Preview"
-                     style="max-height: 70vh;">
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <div class="modal-body text-center p-2">
+                <img src="{{ url_for('uploaded_file', filename=filename) }}" class="img-fluid" alt="Receipt full size">
             </div>
         </div>
     </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const saveLocationBtn = document.getElementById('saveLocationBtn');
+document.addEventListener('DOMContentLoaded', function () {
+    const $ = id => document.getElementById(id);
+    const form = $('expenseForm');
+    const csrf = () => (document.querySelector('input[name="csrf_token"]') || {}).value || '';
+    const money = v => (isNaN(v) ? '' : v.toFixed(2));
 
-    // Quick Location Selection
-    const quickSelect = document.getElementById('quickLocationSelect');
-    const badgeContainer = document.getElementById('locationBadgeContainer');
-    const locationPrompt = document.getElementById('locationMatchPrompt');
-
-    if (quickSelect) {
-        quickSelect.addEventListener('change', function() {
-            if (!this.value) return;
-            
-            const option = this.options[this.selectedIndex];
-            const name = option.getAttribute('data-name');
-            const address = option.getAttribute('data-address');
-            const category = option.getAttribute('data-category');
-            
-            if (name) document.getElementById('merchant_name').value = name;
-            if (address) document.getElementById('address').value = address;
-            if (category) document.getElementById('category').value = category;
-            
-            // Update badge UI
-            if (badgeContainer) {
-                badgeContainer.innerHTML = `
-                    <span class="badge rounded-pill bg-info text-dark shadow-sm scale-in">
-                        <i class="bi bi-geo-fill me-1"></i> Matched: ${name}
-                    </span>
-                `;
-            }
-            if (locationPrompt) locationPrompt.style.display = 'none';
-        });
+    /* ---------- store matching ---------- */
+    const badge = $('locationBadgeContainer'), prompt = $('locationMatchPrompt');
+    function setBadge(kind, text) {
+        badge.replaceChildren();
+        if (!text) return;
+        const el = document.createElement('span');
+        el.className = 'badge rounded-pill text-bg-' + kind;
+        const icon = document.createElement('i');
+        icon.className = 'bi me-1 ' + (kind === 'success' ? 'bi-check-circle-fill' : 'bi-geo-fill');
+        el.append(icon, (kind === 'success' ? 'Saved: ' : 'Matched: ') + text);
+        badge.append(el);
     }
 
-    if (saveLocationBtn) {
-        saveLocationBtn.addEventListener('click', function() {
-            const name = document.getElementById('merchant_name').value;
-            const address = document.getElementById('address').value;
-            const category = document.getElementById('category').value;
-            
-            if (!name || !address) {
-                alert('Please ensure both Merchant Name and Address are filled in first.');
-                return;
-            }
-            
-            const originalBtnText = saveLocationBtn.innerHTML;
-            saveLocationBtn.disabled = true;
-            saveLocationBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Saving...';
-            
-            const formData = new FormData();
-            formData.append('merchant_name', name);
-            formData.append('address', address);
-            formData.append('category', category);
-            
-            fetch("{{ url_for('quick_add_location') }}", {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
-                }
+    const quick = $('quickLocationSelect');
+    if (quick) quick.addEventListener('change', function () {
+        if (!this.value) return;
+        const o = this.options[this.selectedIndex];
+        if (o.dataset.name) $('merchant_name').value = o.dataset.name;
+        if (o.dataset.address) $('address').value = o.dataset.address;
+        if (o.dataset.category && o.dataset.category !== 'None') $('category').value = o.dataset.category;
+        setBadge('info', o.dataset.name);
+        prompt.style.display = 'none';
+    });
+
+    const saveLoc = $('saveLocationBtn');
+    if (saveLoc) saveLoc.addEventListener('click', function () {
+        const name = $('merchant_name').value.trim(), address = $('address').value.trim();
+        if (!name || !address) { alert('Fill in both the merchant name and address first.'); return; }
+        const label = saveLoc.innerHTML;
+        saveLoc.disabled = true;
+        saveLoc.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving…';
+        const fd = new FormData();
+        fd.append('merchant_name', name); fd.append('address', address); fd.append('category', $('category').value);
+        fetch({{ url_for('quick_add_location')|tojson }}, { method: 'POST', body: fd, headers: { 'X-CSRFToken': csrf() } })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) { setBadge('success', name); prompt.style.display = 'none'; }
+                else { alert('Error: ' + d.error); saveLoc.disabled = false; saveLoc.innerHTML = label; }
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    if (badgeContainer) {
-                        badgeContainer.innerHTML = `
-                            <span class="badge rounded-pill bg-success shadow-sm scale-in">
-                                <i class="bi bi-check-circle-fill me-1"></i> Saved: ${name}
-                            </span>
-                        `;
-                    }
-                    if (locationPrompt) locationPrompt.style.display = 'none';
-                } else {
-                    alert('Error: ' + data.error);
-                    saveLocationBtn.disabled = false;
-                    saveLocationBtn.innerHTML = originalBtnText;
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Connection error. Please try again.');
-                saveLocationBtn.disabled = false;
-                saveLocationBtn.innerHTML = originalBtnText;
+            .catch(() => { alert('Connection error. Please try again.'); saveLoc.disabled = false; saveLoc.innerHTML = label; });
+    });
+
+    $('address').addEventListener('input', function () {
+        setBadge('', '');
+        if (saveLoc) prompt.style.display = this.value.trim().length > 5 ? 'block' : 'none';
+    });
+
+    /* ---------- category hint from merchant name ---------- */
+    const hints = {
+        'pawn': 'inventory', 'estate sale': 'inventory', 'garage sale': 'inventory', 'yard sale': 'inventory',
+        'auction': 'inventory', 'thrift': 'inventory', 'flea market': 'inventory',
+        'amazon': 'office_supplies', 'staples': 'office_supplies', 'office depot': 'office_supplies',
+        'best buy': 'equipment', 'target': 'office_supplies', 'walmart': 'office_supplies',
+        'uber': 'travel', 'lyft': 'travel', 'shell': 'travel', 'exxon': 'travel', 'hotel': 'travel',
+        'marriott': 'travel', 'hilton': 'travel', 'restaurant': 'meals', 'cafe': 'meals',
+        'starbucks': 'meals', 'mcdonalds': 'meals', 'fedex': 'professional_services'
+    };
+    $('merchant_name').addEventListener('blur', function () {
+        const n = this.value.toLowerCase();
+        for (const k in hints) { if (n.includes(k)) { $('category').value = hints[k]; break; } }
+    });
+
+    /* ---------- money fields ---------- */
+    ['amount', 'subtotal', 'tax_amount', 'discount_amount'].forEach(id => {
+        const el = $(id);
+        if (el) el.addEventListener('blur', function () { const v = parseFloat(this.value); if (!isNaN(v)) this.value = money(v); });
+    });
+
+    /* ---------- line items ---------- */
+    const list = $('itemList');
+    const rows = () => Array.from(list.querySelectorAll('[data-item]'));
+    const field = (row, f) => row.querySelector('[data-f="' + f + '"]');
+
+    function refreshItems() {
+        let total = 0, n = 0;
+        rows().forEach(r => {
+            const price = parseFloat(field(r, 'price').value), qty = parseInt(field(r, 'quantity').value, 10);
+            const line = r.querySelector('.item-line');
+            if (!isNaN(price)) {
+                const t = price * (isNaN(qty) ? 1 : qty);
+                total += t; line.textContent = '$' + money(t);
+            } else { line.textContent = ''; }
+            n++;
+        });
+        $('itemCount').textContent = n ? '(' + n + ')' : '';
+        $('itemsEmpty').classList.toggle('d-none', n > 0);
+
+        const box = $('itemsCheck'), sub = parseFloat($('subtotal').value);
+        if (!n) { box.classList.add('d-none'); return; }
+        box.classList.remove('d-none');
+        box.classList.remove('ok', 'off');
+        if (isNaN(sub)) {
+            box.textContent = 'Items total $' + money(total);
+        } else if (Math.abs(total - sub) <= 0.02) {
+            box.classList.add('ok');
+            box.textContent = '✓ Items add up to the subtotal ($' + money(total) + ')';
+        } else {
+            box.classList.add('off');
+            box.textContent = 'Items total $' + money(total) + ' vs subtotal $' + money(sub) + ' (' + (total > sub ? '+' : '−') + '$' + money(Math.abs(total - sub)) + ')';
+        }
+    }
+
+    list.addEventListener('input', refreshItems);
+    $('subtotal').addEventListener('input', refreshItems);
+    list.addEventListener('click', function (e) {
+        const del = e.target.closest('.item-del');
+        if (del) { del.closest('[data-item]').remove(); refreshItems(); }
+    });
+    $('addItemBtn').addEventListener('click', function () {
+        const row = document.createElement('div');
+        row.className = 'item-row'; row.setAttribute('data-item', '');
+        row.innerHTML =
+            '<input type="hidden" data-f="sku" value=""><input type="hidden" data-f="raw_line" value="">' +
+            '<input class="form-control item-desc" data-f="description" placeholder="Item description" aria-label="Description">' +
+            '<button type="button" class="btn btn-light item-del" aria-label="Remove item"><i class="bi bi-x-lg text-danger"></i></button>' +
+            '<div class="item-nums"><label class="item-num"><span>Qty</span><input class="form-control" data-f="quantity" inputmode="numeric" value="1"></label>' +
+            '<label class="item-num item-price"><span>$</span><input class="form-control" data-f="price" inputmode="decimal"></label>' +
+            '<span class="item-line money ms-auto"></span></div>';
+        list.append(row);
+        field(row, 'description').focus();
+        refreshItems();
+    });
+    refreshItems();
+
+    /* Name the item inputs item_<n>_<field> (what the save routes read), skipping empty rows. */
+    function nameItems() {
+        let n = 0;
+        rows().forEach(r => {
+            const keep = field(r, 'description').value.trim() && field(r, 'price').value.trim() !== '';
+            ['sku', 'description', 'price', 'quantity', 'raw_line'].forEach(f => {
+                const el = field(r, f);
+                if (keep) el.name = 'item_' + n + '_' + f; else el.removeAttribute('name');
             });
+            if (keep) n++;
         });
+        let count = form.querySelector('input[name="items_count"]');
+        if (!count) { count = document.createElement('input'); count.type = 'hidden'; count.name = 'items_count'; form.append(count); }
+        count.value = n;
     }
 
-    const addressInput = document.getElementById('address');
-    if (addressInput && saveLocationBtn) {
-        addressInput.addEventListener('input', function() {
-            // If they are typing, hide the "Matched" badge because it might be invalid now
-            if (badgeContainer) badgeContainer.innerHTML = '';
-            
-            if (this.value.trim().length > 5) {
-                if (locationPrompt) locationPrompt.style.display = 'block';
-            } else {
-                if (locationPrompt) locationPrompt.style.display = 'none';
-            }
-        });
-    }
-
-    const merchantInput = document.getElementById('merchant_name');
-    const categorySelect = document.getElementById('category');
-
-    if (merchantInput && categorySelect) {
-        merchantInput.addEventListener('blur', function() {
-            const merchantName = this.value.toLowerCase();
-            const categoryMappings = {
-                'pawn': 'inventory',
-                'metro pawn': 'inventory',
-                'estate sale': 'inventory',
-                'garage sale': 'inventory',
-                'yard sale': 'inventory',
-                'auction': 'inventory',
-                'thrift': 'inventory',
-                'flea market': 'inventory',
-                'amazon': 'office_supplies',
-                'staples': 'office_supplies',
-                'office depot': 'office_supplies',
-                'best buy': 'equipment',
-                'target': 'office_supplies',
-                'walmart': 'office_supplies',
-                'uber': 'travel',
-                'lyft': 'travel',
-                'gas': 'travel',
-                'shell': 'travel',
-                'exxon': 'travel',
-                'restaurant': 'meals',
-                'cafe': 'meals',
-                'starbucks': 'meals',
-                'mcdonalds': 'meals',
-                'hotel': 'travel',
-                'marriott': 'travel',
-                'hilton': 'travel',
-                'fedex': 'professional_services',
-                'ups': 'professional_services'
-            };
-
-            for (const [keyword, category] of Object.entries(categoryMappings)) {
-                if (merchantName.includes(keyword)) {
-                    categorySelect.value = category;
-                    break;
-                }
-            }
-        });
-    }
-
-    const expenseForm = document.getElementById('expenseForm');
-    if (expenseForm) {
-        expenseForm.addEventListener('submit', function(e) {
-            const duplicateAlert = document.getElementById('duplicateWarning');
-            const saveBtn = document.getElementById('saveBtn');
-
-            if (duplicateAlert && !duplicateAlert.hasAttribute('data-confirmed')) {
-                e.preventDefault();
-                duplicateAlert.scrollIntoView({ behavior: 'smooth' });
-                duplicateAlert.classList.add('shadow-lg');
-                return false;
-            }
-
-            if (saveBtn) {
-                saveBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving...';
-                saveBtn.disabled = true;
-            }
-        });
-    }
-
-    window.proceedAnyway = function() {
-        const duplicateAlert = document.getElementById('duplicateWarning');
-        const saveBtn = document.getElementById('saveBtn');
-
-        if (duplicateAlert) {
-            duplicateAlert.setAttribute('data-confirmed', 'true');
-            duplicateAlert.classList.remove('alert-warning');
-            duplicateAlert.classList.add('alert-info');
-            duplicateAlert.innerHTML = '<i class="bi bi-info-circle"></i> <strong>Duplicate confirmed:</strong> You can now save this receipt.';
-        }
-
-        if (saveBtn) {
-            saveBtn.className = 'btn btn-warning btn-lg';
-            saveBtn.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Save duplicate';
-        }
+    /* ---------- duplicates + submit ---------- */
+    const dupBox = $('duplicateWarning');
+    window.proceedAnyway = function () {
+        dupBox.setAttribute('data-confirmed', 'true');
+        dupBox.className = 'alert alert-info mb-3';
+        dupBox.textContent = 'Duplicate acknowledged - you can save this receipt now.';
+        $('saveBtn').classList.replace('btn-primary', 'btn-warning');
+    };
+    window.cancelUpload = function () {
+        if (!confirm('Discard this receipt and delete the uploaded file?')) return;
+        const name = form.querySelector('input[name="filename"]').value;
+        fetch('/delete_uploaded_file', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+            body: JSON.stringify({ filename: name })
+        }).finally(() => { window.location.href = {{ url_for('index')|tojson }}; });
     };
 
-    window.cancelUpload = function() {
-        if (confirm('Are you sure you want to cancel and delete this uploaded file? This action cannot be undone.')) {
-            const filenameField = document.querySelector('input[name="filename"]');
-            if (!filenameField) {
-                return;
-            }
-
-            fetch('/delete_uploaded_file', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
-                },
-                body: JSON.stringify({ filename: filenameField.value })
-            })
-            .then(response => response.json())
-            .then(data => {
-                window.location.href = '{{ url_for("index") }}';
-            })
-            .catch(() => {
-                window.location.href = '{{ url_for("index") }}';
-            });
+    form.addEventListener('submit', function (e) {
+        if (dupBox && !dupBox.hasAttribute('data-confirmed')) {
+            e.preventDefault();
+            dupBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
         }
-    };
-
-    window.dismissWarning = function() {
-        const duplicateAlert = document.getElementById('duplicateWarning');
-        if (duplicateAlert) {
-            duplicateAlert.style.display = 'none';
-        }
-
-        if (!document.getElementById('duplicateReminder')) {
-            const reminder = document.createElement('div');
-            reminder.id = 'duplicateReminder';
-            reminder.className = 'alert alert-secondary alert-dismissible fade show';
-            reminder.innerHTML = `
-                <small><i class="bi bi-info-circle"></i> Duplicate warning hidden. 
-                <button type="button" class="btn btn-link btn-sm p-0 ms-1" onclick="showDuplicateWarning()">Show again</button></small>
-                <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert"></button>
-            `;
-
-            const formColumn = document.getElementById('formColumn');
-            if (formColumn) {
-                formColumn.insertBefore(reminder, formColumn.firstChild);
-            }
-        }
-    };
-
-    window.showDuplicateWarning = function() {
-        const duplicateAlert = document.getElementById('duplicateWarning');
-        const reminder = document.getElementById('duplicateReminder');
-
-        if (duplicateAlert) {
-            duplicateAlert.style.display = 'block';
-        }
-        if (reminder) {
-            reminder.remove();
-        }
-    };
-
-    const amountInput = document.getElementById('amount');
-    if (amountInput) {
-        amountInput.addEventListener('blur', function() {
-            const value = parseFloat(this.value);
-            if (!isNaN(value)) {
-                this.value = value.toFixed(2);
-            }
-        });
-    }
-
-    const subtotalInput = document.getElementById('subtotal');
-    if (subtotalInput) {
-        subtotalInput.addEventListener('blur', function() {
-            const value = parseFloat(this.value);
-            if (!isNaN(value)) {
-                this.value = value.toFixed(2);
-            }
-        });
-    }
-
-    const taxInput = document.getElementById('tax_amount');
-    if (taxInput) {
-        taxInput.addEventListener('blur', function() {
-            const value = parseFloat(this.value);
-            if (!isNaN(value)) {
-                this.value = value.toFixed(2);
-            }
-        });
-    }
-
-    const discountInput = document.getElementById('discount_amount');
-    if (discountInput) {
-        discountInput.addEventListener('blur', function() {
-            const value = parseFloat(this.value);
-            if (!isNaN(value)) {
-                this.value = value.toFixed(2);
-            }
-        });
-    }
+        nameItems();
+        const btn = $('saveBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Saving…';
+    });
 });
 </script>
-{% endblock %} 
+{% endblock %}

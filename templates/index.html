@@ -3,312 +3,138 @@
 {% block title %}Dashboard - Receipt Reader{% endblock %}
 
 {% block content %}
-<!-- Page Header -->
-<div class="page-header d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
-    <div>
-        <h1 class="mb-1">Dashboard</h1>
-        <p class="text-secondary mb-0">Track and manage your business expenses</p>
-    </div>
-    <div class="d-flex gap-2">
-        <a href="{{ url_for('locations_page') }}" class="btn btn-outline-primary shadow-sm">
-            <i class="bi bi-geo-alt"></i> <span class="d-none d-sm-inline">Locations</span>
-        </a>
-        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-outline-primary shadow-sm">
-            <i class="bi bi-files"></i> <span class="d-none d-sm-inline">Bulk</span>
-        </a>
-        <a href="{{ url_for('capture_page') }}" class="btn btn-success shadow-sm">
-            <i class="bi bi-camera-fill"></i> New <span class="d-none d-sm-inline">Receipt</span>
-        </a>
-    </div>
-</div>
+{% set month_total = location_breakdown | sum(attribute=1) %}
+{% set month_count = location_breakdown | sum(attribute=2) %}
 
-<!-- Summary Cards -->
-<div class="row g-3 mb-4">
-    <div class="col-md-4">
-        <div class="card h-100 border-0 shadow-sm" style="background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);">
-            <div class="card-body p-4">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="summary-stat-label text-success">Total Expenses</span>
-                    <span class="badge rounded-pill bg-success-subtle text-success"><i class="bi bi-wallet2"></i> All time</span>
-                </div>
-                <div class="summary-stat-value text-dark mb-1">${{ "%.2f"|format(total_amount) }}</div>
-                <div class="text-secondary small">Across all tracked receipts</div>
-            </div>
-        </div>
+<a href="{{ url_for('capture_page') }}" class="hero-cta mb-3">
+    <span class="icon"><i class="bi bi-camera-fill"></i></span>
+    <span>
+        <h2>New receipt</h2>
+        <p>Snap one or more photos - long receipts welcome</p>
+    </span>
+    <i class="bi bi-chevron-right chev"></i>
+</a>
+
+<div class="stat-row mb-4">
+    <div class="stat-tile wide">
+        <div class="label">This month</div>
+        <div class="value">${{ "{:,.2f}".format(month_total) }}</div>
+        <div class="sub">{{ month_count }} receipt{{ '' if month_count == 1 else 's' }}</div>
     </div>
-    <div class="col-md-4">
-        <div class="card h-100 border-0 shadow-sm" style="background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);">
-            <div class="card-body p-4">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="summary-stat-label text-primary">Receipts</span>
-                    <span class="badge rounded-pill bg-primary-subtle text-primary"><i class="bi bi-receipt"></i> Processed</span>
-                </div>
-                <div class="summary-stat-value text-dark mb-1">{{ total_count or 0 }}</div>
-                <div class="text-secondary small">Archived and verified</div>
-            </div>
-        </div>
+    <div class="stat-tile">
+        <div class="label">All time</div>
+        <div class="value">${{ "{:,.0f}".format(total_amount) }}</div>
+        <div class="sub">total tracked</div>
     </div>
-    <div class="col-md-4">
-        <div class="card h-100 border-0 shadow-sm" style="background: linear-gradient(135deg, #ffffff 0%, #faf5ff 100%);">
-            <div class="card-body p-4">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="summary-stat-label text-purple" style="color: #7c3aed;">Top Category</span>
-                    <span class="badge rounded-pill bg-purple-subtle" style="background: #f3e8ff; color: #7c3aed;"><i class="bi bi-tag"></i> Top Spend</span>
-                </div>
-                {% if category_breakdown %}
-                    {% set top_cat = category_breakdown[0] %}
-                    <div class="summary-stat-value text-dark mb-1">${{ "%.2f"|format(top_cat[1]) }}</div>
-                    <div class="text-secondary small">
-                        {% set cat_names = {
-                            'inventory': 'Inventory (Items for Resale)',
-                            'office_supplies': 'Office Supplies',
-                            'travel': 'Travel & Transportation',
-                            'meals': 'Meals & Entertainment',
-                            'equipment': 'Equipment & Technology',
-                            'advertising': 'Advertising & Marketing',
-                            'professional_services': 'Professional Services',
-                            'utilities': 'Utilities',
-                            'rent': 'Rent & Facility Costs',
-                            'insurance': 'Insurance',
-                            'other': 'Other Business Expenses'
-                        } %}
-                        {{ cat_names.get(top_cat[0], top_cat[0]) }}
-                    </div>
-                {% else %}
-                    <div class="summary-stat-value text-dark mb-1">—</div>
-                    <div class="text-secondary small">No data yet</div>
-                {% endif %}
-            </div>
-        </div>
+    <div class="stat-tile">
+        <div class="label">Receipts</div>
+        <div class="value">{{ total_count or 0 }}</div>
+        <div class="sub">saved so far</div>
     </div>
 </div>
 
 <div class="row g-4">
-    <!-- Quick Upload -->
-    <div class="col-lg-5">
-        <div class="card h-100 shadow-sm border-primary-subtle">
-            <div class="card-header bg-primary text-white">
-                <i class="bi bi-cloud-upload me-2"></i> Upload Receipt
-            </div>
-            <div class="card-body">
-                <form action="{{ url_for('upload_receipt') }}" method="post" enctype="multipart/form-data" id="uploadForm">
-                    {{ form.hidden_tag() }}
-                    
-                    <div class="upload-area p-4 mb-3" onclick="document.getElementById('file').click()">
-                        <i class="bi bi-camera-fill d-block d-md-none mb-2" style="font-size: 2rem;"></i>
-                        <i class="bi bi-cloud-arrow-up d-none d-md-block"></i>
-                        <h6 class="mt-2">Snap or Drop Receipt</h6>
-                        <p class="small">Tap to use camera or browse</p>
-                        <p id="fileName" class="mt-2 fw-bold"></p>
-                    </div>
-                    
-                    {{ form.file(class="d-none", id="file", capture="camera") }}
-                    
-                    <div class="d-grid mt-3">
-                        <button type="submit" class="btn btn-primary btn-lg">
-                            <i class="bi bi-lightning-charge-fill me-1"></i> Process Receipt
-                        </button>
-                    </div>
-                </form>
-                
-                <div class="text-center mt-4 pt-3 border-top">
-                    <p class="text-muted small mb-2">JPG, PNG, PDF supported</p>
-                    <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-link btn-sm text-decoration-none p-0">
-                        <i class="bi bi-files me-1"></i> Bulk upload instead
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Recent Activity -->
     <div class="col-lg-7">
-        <div class="card h-100">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-clock-history me-2"></i> Recent Expenses</span>
-                <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-secondary btn-sm">
-                    View All
-                </a>
-            </div>
-            <div class="card-body p-0">
-                {% if recent_expenses %}
-                    {% for expense in recent_expenses[:5] %}
-                    <a href="{{ url_for('edit_expense', expense_id=expense[0]) }}" class="d-block text-decoration-none">
-                        <div class="d-flex justify-content-between align-items-center px-3 py-3 border-bottom expense-row">
-                            <div>
-                                <div class="expense-merchant">{{ expense[1] }}</div>
-                                <div class="expense-meta">
-                                    {% set cat_names = {
-                                        'inventory': 'Inventory',
-                                        'office_supplies': 'Office Supplies',
-                                        'travel': 'Travel',
-                                        'meals': 'Meals',
-                                        'equipment': 'Equipment',
-                                        'advertising': 'Advertising',
-                                        'professional_services': 'Services',
-                                        'utilities': 'Utilities',
-                                        'rent': 'Rent',
-                                        'insurance': 'Insurance',
-                                        'other': 'Other'
-                                    } %}
-                                    <span class="category-tag cat-{{ expense[4] }}">{{ cat_names.get(expense[4], expense[4]) }}</span>
-                                    <span class="ms-2"><i class="bi bi-calendar3 small me-1"></i>{{ expense[3] }}</span>
-                                    {% if expense[6] %}
-                                    <span class="ms-2"><i class="bi bi-geo-alt small me-1"></i>{{ expense[6] }}</span>
-                                    {% endif %}
-                                </div>
-                                {% if expense[7] %}
-                                <div class="small text-muted mt-1"><i class="bi bi-house-door small me-1"></i>{{ expense[7] }}</div>
-                                {% endif %}
-                            </div>
-                            <div class="text-end">
-                                <div class="expense-amount mb-1">${{ "%.2f"|format(expense[2]) }}</div>
-                                <form action="{{ url_for('reprocess_expense', expense_id=expense[0]) }}" method="post" class="d-inline" onsubmit="return confirm('Re-run AI logic for this receipt? (Uses credits)')">
-                                    <button type="submit" class="btn btn-link btn-sm p-0 text-muted opacity-50 hover-opacity-100" title="Reprocess Receipt" onclick="event.stopPropagation();">
-                                        <i class="bi bi-arrow-repeat"></i> Reprocess
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </a>
-                    {% endfor %}
-                {% else %}
-                    <div class="empty-state">
-                        <i class="bi bi-receipt"></i>
-                        <h5>No expenses yet</h5>
-                        <p>Upload your first receipt to get started</p>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="section-title mb-0">Recent</h2>
+            <a href="{{ url_for('view_expenses') }}" class="small fw-semibold text-decoration-none">View all</a>
+        </div>
+        {% if recent_expenses %}
+        <div class="row-list">
+            {% for e in recent_expenses[:6] %}
+            <a href="{{ url_for('edit_expense', expense_id=e[0]) }}" class="row-item">
+                <span class="row-icon"><i class="bi bi-receipt"></i></span>
+                <span class="row-main">
+                    <div class="row-title">{{ e[1] }}</div>
+                    <div class="row-meta">
+                        <span class="category-tag cat-{{ e[4] }}">{{ cat_short.get(e[4], e[4]) }}</span>
+                        <span>{{ e[3] }}</span>
+                        {% if e[6] %}<span class="text-truncate">{{ e[6] }}</span>{% endif %}
                     </div>
-                {% endif %}
+                </span>
+                <span class="row-amount">${{ "%.2f"|format(e[2]) }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="card"><div class="empty-state">
+            <i class="bi bi-receipt"></i>
+            <h5>No expenses yet</h5>
+            <p class="mb-0">Tap <strong>New receipt</strong> to add your first one.</p>
+        </div></div>
+        {% endif %}
+
+        <p class="text-center small text-muted mt-3 mb-0">
+            Have PDFs or a pile of files? <a href="{{ url_for('bulk_upload_page') }}">Bulk upload</a>
+        </p>
+    </div>
+
+    <div class="col-lg-5">
+        {% if category_breakdown %}
+        <h2 class="section-title">By category</h2>
+        <div class="card mb-4"><div class="card-body">
+            {% for category, amount, count in category_breakdown[:6] %}
+            {% set pct = (amount / total_amount * 100) if total_amount > 0 else 0 %}
+            <div class="bar-row">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span class="category-tag cat-{{ category }}">{{ cat_short.get(category, category) }}</span>
+                    <span class="money">${{ "{:,.2f}".format(amount) }}</span>
+                </div>
+                <div class="bar-track"><div class="bar-fill" style="width: {{ '%.1f'|format(pct) }}%;"></div></div>
+            </div>
+            {% endfor %}
+        </div></div>
+        {% endif %}
+
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="section-title mb-0">By location</h2>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Period">
+                <input type="radio" class="btn-check" name="locPeriod" id="locMonth" checked>
+                <label class="btn btn-outline-primary py-1" for="locMonth">Month</label>
+                <input type="radio" class="btn-check" name="locPeriod" id="locAll">
+                <label class="btn btn-outline-primary py-1" for="locAll">All time</label>
             </div>
         </div>
-    </div>
-</div>
-
-<!-- Breakdowns -->
-<div class="row g-4 mt-2">
-    <!-- Category Breakdown -->
-    {% if category_breakdown %}
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <i class="bi bi-pie-chart me-2"></i> Category Spending
-            </div>
-            <div class="card-body">
-                {% set cat_names = {
-                    'inventory': 'Inventory',
-                    'office_supplies': 'Office Supplies',
-                    'travel': 'Travel & Transportation',
-                    'meals': 'Meals & Entertainment',
-                    'equipment': 'Equipment & Technology',
-                    'advertising': 'Advertising & Marketing',
-                    'professional_services': 'Professional Services',
-                    'utilities': 'Utilities',
-                    'rent': 'Rent & Facility Costs',
-                    'insurance': 'Insurance',
-                    'other': 'Other Business Expenses'
-                } %}
-                {% for category, amount, count in category_breakdown[:6] %}
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <span class="category-tag cat-{{ category }}">{{ cat_names.get(category, category) }}</span>
-                        <strong>${{ "%.2f"|format(amount) }}</strong>
+        <div class="card"><div class="card-body">
+            {% for pane, rows in (('locPaneMonth', location_breakdown), ('locPaneAll', location_breakdown_all)) %}
+            <div id="{{ pane }}" {% if pane == 'locPaneAll' %}class="d-none"{% endif %}>
+                {% if rows %}
+                {% set pane_total = rows | sum(attribute=1) %}
+                {% for location, amount, count in rows[:6] %}
+                {% set pct = (amount / pane_total * 100) if pane_total > 0 else 0 %}
+                <div class="bar-row">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="small fw-semibold"><i class="bi bi-geo-alt me-1 text-muted"></i>{{ location }}
+                            <span class="text-muted fw-normal">· {{ count }}</span></span>
+                        <span class="money">${{ "{:,.2f}".format(amount) }}</span>
                     </div>
-                    <div class="progress" style="height: 4px;">
-                        {% set pct = (amount / total_amount * 100) if total_amount > 0 else 0 %}
-                        <div class="progress-bar" role="progressbar" style="width: {{ pct }}%; background-color: var(--primary-light);"></div>
-                    </div>
+                    <div class="bar-track"><div class="bar-fill" style="width: {{ '%.1f'|format(pct) }}%; background: {{ '#dc2626' if 'Reno' in location else '#2563eb' if 'Sparks' in location else '#94a3b8' }};"></div></div>
                 </div>
                 {% endfor %}
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- Location Breakdown -->
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-geo-alt me-2"></i> Spending by Location</span>
-                <span class="badge bg-primary">This Month</span>
-            </div>
-            <div class="card-body">
-                {% if location_breakdown %}
-                    {% for location, amount, count in location_breakdown[:6] %}
-                    <div class="mb-3">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <span>
-                                {% if 'Reno' in location %}
-                                    <i class="bi bi-pin-map-fill text-danger me-1"></i>
-                                {% elif 'Sparks' in location %}
-                                    <i class="bi bi-pin-map-fill text-primary me-1"></i>
-                                {% else %}
-                                    <i class="bi bi-geo-alt text-muted me-1"></i>
-                                {% endif %}
-                                {{ location }}
-                            </span>
-                            <strong>${{ "%.2f"|format(amount) }}</strong>
-                        </div>
-                        <div class="progress" style="height: 4px;">
-                            {% set month_total = location_breakdown | sum(attribute=1) %}
-                            {% set pct = (amount / month_total * 100) if month_total > 0 else 0 %}
-                            <div class="progress-bar" role="progressbar" style="width: {{ pct }}%; background-color: {{ '#DC3545' if 'Reno' in location else '#0D6EFD' if 'Sparks' in location else '#6C757D' }};"></div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                    <div class="text-end mt-2">
-                        <a href="{{ url_for('locations_page') }}" class="btn btn-link btn-sm p-0 text-decoration-none">
-                            <i class="bi bi-gear me-1"></i> Manage Business Database
-                        </a>
-                    </div>
                 {% else %}
-                    <div class="text-center py-4 text-muted">
-                        <i class="bi bi-info-circle mb-2 d-block fs-4"></i>
-                        <p class="mb-3">No location data for this month</p>
-                        <a href="{{ url_for('locations_page') }}" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-plus-circle me-1"></i> Add Known Businesses
-                        </a>
-                    </div>
+                <div class="text-center text-muted py-3 small">No location data{% if pane == 'locPaneMonth' %} this month{% endif %}.</div>
                 {% endif %}
             </div>
-        </div>
+            {% endfor %}
+            <div class="text-end mt-3">
+                <a href="{{ url_for('locations_page') }}" class="small fw-semibold text-decoration-none"><i class="bi bi-gear me-1"></i>Manage stores</a>
+            </div>
+        </div></div>
     </div>
 </div>
-
-<style>
-    .expense-row {
-        transition: background-color 0.15s ease;
-    }
-    .expense-row:hover {
-        background-color: var(--bg-page);
-    }
-    .expense-row:last-child {
-        border-bottom: none !important;
-    }
-</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('uploadForm');
-    if (form) {
-        form.addEventListener('submit', function() {
-            const submitBtn = form.querySelector('input[type="submit"], button[type="submit"]');
-            if (submitBtn) {
-                submitBtn.disabled = true;
-                submitBtn.value = 'Processing...';
-            }
-            
-            const uploadArea = document.querySelector('.upload-area');
-            if (uploadArea) {
-                uploadArea.innerHTML = `
-                    <div class="spinner-border text-primary mb-3" role="status"></div>
-                    <h6>Processing receipt...</h6>
-                    <p class="text-muted">AI is extracting data</p>
-                `;
-            }
-        });
+document.addEventListener('DOMContentLoaded', function () {
+    const month = document.getElementById('locPaneMonth'), all = document.getElementById('locPaneAll');
+    function sync() {
+        const showAll = document.getElementById('locAll').checked;
+        all.classList.toggle('d-none', !showAll);
+        month.classList.toggle('d-none', showAll);
     }
+    document.getElementById('locMonth').addEventListener('change', sync);
+    document.getElementById('locAll').addEventListener('change', sync);
 });
 </script>
 {% endblock %}

@@ -84,6 +84,20 @@ EXPENSE_CATEGORIES = [
     ('other', 'Other Business Expenses')
 ]
 
+CATEGORY_LABELS = dict(EXPENSE_CATEGORIES)
+CATEGORY_SHORT = {
+    'inventory': 'Inventory', 'office_supplies': 'Office', 'travel': 'Travel', 'meals': 'Meals',
+    'equipment': 'Equipment', 'advertising': 'Advertising', 'professional_services': 'Services',
+    'utilities': 'Utilities', 'rent': 'Rent', 'insurance': 'Insurance', 'other': 'Other',
+}
+
+
+@app.context_processor
+def inject_category_labels():
+    """Expose category code -> label to every template (replaces per-template copies)."""
+    return {'cat_labels': CATEGORY_LABELS, 'cat_short': CATEGORY_SHORT}
+
+
 class ReceiptForm(FlaskForm):
     file = FileField('Receipt Image', validators=[
         FileRequired(),
@@ -954,22 +968,38 @@ def stage_ocr_for_review(ocr_result, filename, file_hash):
     if hasattr(ocr_result.get('date'), 'strftime'):
         ocr_result['date'] = ocr_result['date'].strftime('%Y-%m-%d')
 
+    prune_staged_ocr()
     with open(_ocr_cache_path(filename), 'w', encoding='utf-8') as handle:
         json.dump(ocr_result, handle, default=str)
     return url_for('review_receipt', filename=filename)
 
 
-def pop_staged_ocr(filename):
+def load_staged_ocr(filename):
+    """Read a pending review draft. It stays on disk until saved/discarded so a refresh doesn't lose it."""
     path = _ocr_cache_path(filename)
     if not os.path.exists(path):
         return None
     with open(path, 'r', encoding='utf-8') as handle:
-        data = json.load(handle)
+        return json.load(handle)
+
+
+def discard_staged_ocr(filename):
     try:
-        os.remove(path)
-    except OSError:
+        os.remove(_ocr_cache_path(filename))
+    except (OSError, TypeError):
         pass
-    return data
+
+
+def prune_staged_ocr(max_age_hours=24):
+    """Drop review drafts that were never saved."""
+    cutoff = datetime.now().timestamp() - max_age_hours * 3600
+    for name in os.listdir(OCR_CACHE_FOLDER):
+        path = os.path.join(OCR_CACHE_FOLDER, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
 
 
 @app.route('/upload', methods=['POST'])
@@ -1141,7 +1171,7 @@ def capture_process():
 def review_receipt(filename):
     """Review page for processed receipt."""
     # Get OCR results from session
-    ocr_result = pop_staged_ocr(filename)
+    ocr_result = load_staged_ocr(filename)
     if not ocr_result:
         flash('Receipt processing data not found. Please upload again.', 'error')
         return redirect(url_for('index'))
@@ -1157,6 +1187,8 @@ def review_receipt(filename):
     form = ExpenseForm()
     if ocr_result.get('raw_text'):
         form.raw_json.data = ocr_result['raw_text']
+    # Preselect the category (saved-store match first, then a guess from the merchant name)
+    form.category.data = ocr_result.get('category') or infer_category_from_merchant(ocr_result.get('merchant_name'))
     
     return render_template('edit_expense.html', 
                          form=form,
@@ -1257,6 +1289,7 @@ def save_expense():
         
         conn.commit()
         conn.close()
+        discard_staged_ocr(filename)
         
         flash('Expense saved successfully!', 'success')
         return redirect(url_for('index'))
@@ -1441,18 +1474,22 @@ def export_expenses(format):
     total_amount = df['amount'].sum()
     category_summary = df.groupby('category')['amount'].sum().to_dict()
     
-    # Add summary rows
-    summary_data = []
-    summary_data.append(['', '', '', '', ''])
-    summary_data.append(['SUMMARY', '', '', '', ''])
-    summary_data.append(['Total Amount:', f'${total_amount:.2f}', '', '', ''])
-    summary_data.append(['', '', '', '', ''])
-    summary_data.append(['Category Breakdown:', '', '', '', ''])
-    
+    # Add summary rows, padded to however many columns the export has
+    def pad(*cells):
+        return list(cells) + [''] * (len(df.columns) - len(cells))
+
+    summary_data = [
+        pad(),
+        pad('SUMMARY'),
+        pad('Total Amount:', f'${total_amount:.2f}'),
+        pad(),
+        pad('Category Breakdown:'),
+    ]
+
     for cat_code, cat_name in EXPENSE_CATEGORIES:
         if cat_code in category_summary:
-            summary_data.append([cat_name, f'${category_summary[cat_code]:.2f}', '', '', ''])
-    
+            summary_data.append(pad(cat_name, f'${category_summary[cat_code]:.2f}'))
+
     # Add summary to DataFrame
     summary_df = pd.DataFrame(summary_data, columns=df.columns)
     df_with_summary = pd.concat([df, summary_df], ignore_index=True)
@@ -1562,42 +1599,37 @@ def uploaded_file(filename):
 def view_expense_items(expense_id):
     """View individual items for a specific expense."""
     conn = sqlite3.connect('receipts.db')
-    cursor = conn.cursor()
-    
-    # Get expense details (ensure it belongs to current user)
-    cursor.execute('''
-        SELECT id, amount, tax_amount, discount_amount, tax_rate, subtotal,
-               receipt_filename, merchant_name, date, user_id
-        FROM expenses
-        WHERE id = ? AND user_id = ?
-    ''', (expense_id, current_user.id))
-    expense = cursor.fetchone()
-    
-    if not expense:
-        flash('Expense not found!', 'error')
-        return redirect(url_for('view_expenses'))
-    
-    # Get individual items
-    cursor.execute('''
-        SELECT id, sku, description, price, quantity
-        FROM receipt_items
-        WHERE expense_id = ?
-        ORDER BY id
-    ''', (expense_id,))
-    items = [{
-        'id': row[0],
-        'sku': row[1],
-        'description': row[2],
-        'price': row[3],
-        'quantity': row[4] if row[4] is not None else 1
-    } for row in cursor.fetchall()]
-    
-    conn.close()
-    
-    return render_template('expense_items.html', 
-                         expense=expense,
+    conn.row_factory = sqlite3.Row
+    try:
+        # Ownership is enforced in the query itself
+        expense = conn.execute('''
+            SELECT id, merchant_name, amount, date, category, description, receipt_filename,
+                   subtotal, tax_amount, discount_amount, tax_rate
+            FROM expenses
+            WHERE id = ? AND user_id = ?
+        ''', (expense_id, current_user.id)).fetchone()
+
+        if not expense:
+            flash('Expense not found!', 'error')
+            return redirect(url_for('view_expenses'))
+
+        items = [dict(row) for row in conn.execute('''
+            SELECT id, sku, description, price, quantity, raw_line
+            FROM receipt_items
+            WHERE expense_id = ?
+            ORDER BY id
+        ''', (expense_id,))]
+    finally:
+        conn.close()
+
+    for item in items:
+        item['quantity'] = item['quantity'] if item['quantity'] is not None else 1
+        item['line_total'] = (item['price'] or 0) * item['quantity']
+
+    return render_template('expense_items.html',
+                         expense=dict(expense),
                          items=items,
-                         categories=EXPENSE_CATEGORIES)
+                         items_total=sum(item['line_total'] for item in items))
 
 @app.route('/view_raw_text/<filename>')
 def view_raw_text(filename):
@@ -2535,6 +2567,7 @@ def issue_dashboard():
 @app.route('/get_expense_items/<int:expense_id>')
 @login_required
 def get_expense_items(expense_id):
+    conn = None
     try:
         conn = sqlite3.connect('receipts.db')
         cursor = conn.cursor()
@@ -2568,7 +2601,7 @@ def get_expense_items(expense_id):
         } for row in cursor.fetchall()]
         
         # Calculate items total directly from the items list (price * quantity)
-        items_total = sum(item['price'] * item['quantity'] for item in items)
+        items_total = sum((item['price'] or 0) * item['quantity'] for item in items)
         item_count = len(items)
         
         print(f"Getting items for expense {expense_id}: {item_count} items, total=${items_total:.2f}")
@@ -2606,10 +2639,9 @@ def get_expense_items(expense_id):
             'discount_amount': discount_amount,
             'tax_rate': tax_rate,
             'subtotal': calculated_subtotal,
-            'receipt_file': expense[5],
-            'merchant': expense[6],
-            'date': expense[7],
-            'user_id': expense[8],
+            'receipt_file': expense[6],
+            'merchant': expense[7],
+            'date': expense[8],
             'item_count': item_count,
             'items_total': items_total
         }
@@ -2624,7 +2656,8 @@ def get_expense_items(expense_id):
         app.logger.error(f"Error getting expense items: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 @app.route('/delete_uploaded_file', methods=['POST'])
 @login_required
@@ -2643,6 +2676,7 @@ def delete_uploaded_file():
             return jsonify({'success': False, 'error': 'Invalid filename'}), 400
         
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        discard_staged_ocr(filename)
         
         # Check if file exists and delete it
         if os.path.exists(filepath):

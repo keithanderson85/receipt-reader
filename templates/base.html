@@ -2,649 +2,99 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
     <title>{% block title %}Receipt Reader{% endblock %}</title>
-    
-    <!-- Inter Font -->
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    
-    <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
-    
-    <style>
-        :root {
-            --primary: #0f172a;
-            --primary-light: #3b82f6;
-            --primary-hover: #2563eb;
-            --bg-page: #f8fafc;
-            --bg-card: #ffffff;
-            --text-primary: #0f172a;
-            --text-secondary: #475569;
-            --text-muted: #94a3b8;
-            --border: #e2e8f0;
-            --border-hover: #cbd5e1;
-            --success: #10b981;
-            --success-bg: #ecfdf5;
-            --error: #ef4444;
-            --error-bg: #fef2f2;
-            --warning: #f59e0b;
-            --warning-bg: #fffbeb;
-            --accent: #6366f1;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
-            --radius-md: 10px;
-            --radius-lg: 14px;
-        }
-        
-        * {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        
-        body {
-            background-color: var(--bg-page);
-            color: var(--text-primary);
-            min-height: 100vh;
-            -webkit-font-smoothing: antialiased;
-        }
-        
-        /* Navigation */
-        .navbar {
-            background: rgba(15, 23, 42, 0.95) !important;
-            backdrop-filter: blur(8px);
-            padding: 0.875rem 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-        }
-        
-        .navbar-brand {
-            font-weight: 700;
-            font-size: 1.25rem;
-            color: #fff !important;
-            letter-spacing: -0.02em;
-        }
-        
-        .navbar-brand i {
-            margin-right: 0.5rem;
-            color: #60a5fa;
-        }
-        
-        .nav-link {
-            color: rgba(255, 255, 255, 0.8) !important;
-            font-weight: 500;
-            font-size: 0.9rem;
-            padding: 0.5rem 0.875rem !important;
-            border-radius: 8px;
-            transition: all 0.15s ease;
-        }
-        
-        .nav-link:hover {
-            color: #fff !important;
-            background-color: rgba(255, 255, 255, 0.08);
-        }
-
-        .nav-link.active {
-            color: #fff !important;
-            background-color: rgba(59, 130, 246, 0.25);
-            font-weight: 600;
-        }
-        
-        .nav-link i {
-            margin-right: 0.35rem;
-        }
-        
-        /* Main Content */
-        .main-content {
-            max-width: 1100px;
-            margin: 0 auto;
-            padding: 2.25rem 1rem;
-        }
-        
-        /* Page Header */
-        .page-header {
-            margin-bottom: 1.75rem;
-        }
-        
-        .page-header h1 {
-            font-size: 1.875rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            letter-spacing: -0.03em;
-            margin-bottom: 0.25rem;
-        }
-        
-        .page-header p {
-            color: var(--text-secondary);
-            font-size: 0.95rem;
-            margin-bottom: 0;
-        }
-        
-        /* Cards */
-        .card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-sm);
-            transition: box-shadow 0.2s ease, border-color 0.2s ease;
-        }
-
-        .card:hover {
-            border-color: var(--border-hover);
-        }
-        
-        .card-header {
-            background: transparent;
-            border-bottom: 1px solid var(--border);
-            padding: 1.125rem 1.35rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .card-body {
-            padding: 1.35rem;
-        }
-        
-        /* Buttons */
-        .btn {
-            font-weight: 500;
-            border-radius: 8px;
-            padding: 0.55rem 1.15rem;
-            transition: all 0.15s ease;
-        }
-
-        .btn-primary {
-            background-color: var(--primary-light);
-            border-color: var(--primary-light);
-            color: #fff;
-            box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
-        }
-        
-        .btn-primary:hover, .btn-primary:focus {
-            background-color: var(--primary-hover);
-            border-color: var(--primary-hover);
-            box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3);
-            transform: translateY(-1px);
-        }
-        
-        .btn-outline-secondary {
-            border-color: var(--border);
-            color: var(--text-secondary);
-            background: #fff;
-        }
-        
-        .btn-outline-secondary:hover {
-            background-color: var(--bg-page);
-            border-color: var(--border-hover);
-            color: var(--text-primary);
-        }
-
-        .btn-outline-primary {
-            border-color: #bfdbfe;
-            color: var(--primary-light);
-            background: #eff6ff;
-        }
-
-        .btn-outline-primary:hover {
-            background-color: var(--primary-light);
-            border-color: var(--primary-light);
-            color: #fff;
-        }
-        
-        /* Year Filter Pills */
-        .year-filter {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 1.5rem;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .year-filter-label {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            margin-right: 0.5rem;
-        }
-        
-        .year-pill {
-            padding: 0.45rem 0.95rem;
-            border-radius: 999px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            border: 1px solid var(--border);
-            background: var(--bg-card);
-            color: var(--text-secondary);
-            text-decoration: none;
-            transition: all 0.15s ease;
-        }
-        
-        .year-pill:hover {
-            border-color: var(--primary-light);
-            color: var(--primary-light);
-            background: #eff6ff;
-        }
-        
-        .year-pill.active {
-            background: var(--primary-light);
-            border-color: var(--primary-light);
-            color: #fff;
-            box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
-        }
-        
-        /* Summary Stats */
-        .summary-stat-value {
-            font-size: 1.75rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            letter-spacing: -0.02em;
-        }
-        
-        .summary-stat-label {
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-        }
-        
-        /* Expense Cards */
-        .expense-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
-            padding: 1.1rem 1.35rem;
-            margin-bottom: 0.75rem;
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-            cursor: pointer;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .expense-card:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-md);
-            transform: translateY(-1px);
-        }
-        
-        .expense-merchant {
-            font-size: 1.05rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            letter-spacing: -0.01em;
-        }
-        
-        .expense-amount {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: #059669;
-            text-align: right;
-        }
-
-        .hover-opacity-100 {
-            transition: opacity 0.2s ease;
-        }
-        .expense-card:hover .hover-opacity-100 {
-            opacity: 1 !important;
-        }
-        
-        .expense-meta {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-        
-        .category-tag {
-            display: inline-block;
-            padding: 0.25rem 0.65rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            background: #F1F5F9;
-            color: var(--text-secondary);
-        }
-        
-        /* Category Colors */
-        .cat-inventory { background: #dbeafe; color: #1e40af; }
-        .cat-office_supplies { background: #e0e7ff; color: #3730a3; }
-        .cat-travel { background: #cffafe; color: #0e7490; }
-        .cat-meals { background: #fef3c7; color: #92400e; }
-        .cat-equipment { background: #f3e8ff; color: #6b21a8; }
-        .cat-advertising { background: #fce7f3; color: #9d174d; }
-        .cat-professional_services { background: #d1fae5; color: #065f46; }
-        .cat-utilities { background: #e2e8f0; color: #334155; }
-        .cat-rent { background: #fee2e2; color: #991b1b; }
-        .cat-insurance { background: #f1f5f9; color: #475569; }
-        .cat-other { background: #f1f5f9; color: #475569; }
-        
-        /* Alerts */
-        .alert {
-            border-radius: var(--radius-md);
-            border: 1px solid transparent;
-            font-size: 0.9rem;
-            padding: 0.875rem 1.15rem;
-        }
-        
-        .alert-success {
-            background-color: var(--success-bg);
-            border-color: #a7f3d0;
-            color: #065f46;
-        }
-        
-        .alert-danger {
-            background-color: var(--error-bg);
-            border-color: #fecaca;
-            color: #991b1b;
-        }
-        
-        .alert-warning {
-            background-color: var(--warning-bg);
-            border-color: #fde68a;
-            color: #92400e;
-        }
-        
-        /* Upload Area */
-        .upload-area {
-            border: 2px dashed #cbd5e1;
-            border-radius: var(--radius-lg);
-            padding: 2.5rem 1.5rem;
-            text-align: center;
-            background-color: #f8fafc;
-            transition: all 0.2s ease;
-            cursor: pointer;
-        }
-        
-        .upload-area:hover, .upload-area.dragover {
-            border-color: var(--primary-light);
-            background-color: #eff6ff;
-        }
-        
-        .upload-area i {
-            font-size: 2.25rem;
-            color: var(--primary-light);
-            margin-bottom: 0.75rem;
-        }
-        
-        .upload-area h6 {
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 0.25rem;
-        }
-        
-        .upload-area p {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-            margin-bottom: 0;
-        }
-        
-        /* Forms */
-        .form-label {
-            font-weight: 500;
-            font-size: 0.875rem;
-            color: var(--text-primary);
-            margin-bottom: 0.375rem;
-        }
-            margin-bottom: 0;
-        }
-        
-        /* Forms */
-        .form-label {
-            font-weight: 500;
-            font-size: 0.875rem;
-            color: var(--text-primary);
-            margin-bottom: 0.375rem;
-        }
-        
-        .form-control, .form-select {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.625rem 0.875rem;
-            font-size: 0.9rem;
-            transition: all 0.2s ease;
-        }
-        
-        .form-control:focus, .form-select:focus {
-            border-color: var(--primary-light);
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-        
-        /* Footer */
-        .footer {
-            background: var(--bg-card);
-            border-top: 1px solid var(--border);
-            padding: 1.5rem 0;
-            margin-top: 3rem;
-            text-align: center;
-            color: var(--text-secondary);
-            font-size: 0.85rem;
-        }
-        
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 3rem 2rem;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            opacity: 0.5;
-        }
-        
-        .empty-state h5 {
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-        
-        /* Dropdown Menu */
-        .dropdown-menu {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            padding: 0.5rem;
-        }
-        
-        .dropdown-item {
-            border-radius: 6px;
-            padding: 0.5rem 0.75rem;
-            font-size: 0.9rem;
-        }
-        
-        .dropdown-item:hover {
-            background-color: var(--bg-page);
-        }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .main-content {
-                padding: 1rem;
-            }
-            
-            .page-header h1 {
-                font-size: 1.5rem;
-            }
-            
-            .summary-bar {
-                flex-direction: column;
-                text-align: center;
-            }
-            
-            .summary-stat {
-                width: 100%;
-            }
-
-            .upload-area {
-                padding: 2rem 1rem;
-            }
-
-            .btn {
-                padding: 0.75rem 1rem;
-            }
-
-            .expense-amount {
-                font-size: 1rem;
-            }
-        }
-    </style>
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+    {% block head %}{% endblock %}
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-dark">
-        <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="bi bi-receipt-cutoff"></i> Receipt Reader
-            </a>
-            
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            
-            <div class="collapse navbar-collapse" id="navbarNav">
-                {% if current_user.is_authenticated %}
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
-                            <i class="bi bi-house"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'capture_page' %}active{% endif %}" href="{{ url_for('capture_page') }}">
-                            <i class="bi bi-camera"></i> New Receipt
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'view_expenses' %}active{% endif %}" href="{{ url_for('view_expenses') }}">
-                            <i class="bi bi-list-check"></i> Expenses
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}">
-                            <i class="bi bi-geo-alt"></i> Locations
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'bulk_upload_page' %}active{% endif %}" href="{{ url_for('bulk_upload_page') }}">
-                            <i class="bi bi-cloud-upload"></i> Upload
-                        </a>
-                    </li>
+    {% set ep = request.endpoint %}
+    <header class="app-topbar">
+        <div class="inner">
+            <a class="app-brand" href="{{ url_for('index') }}"><i class="bi bi-receipt-cutoff"></i> Receipt Reader</a>
+
+            {% if current_user.is_authenticated %}
+            <nav class="top-links" aria-label="Main">
+                <a class="top-link {% if ep == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-house"></i> Dashboard</a>
+                <a class="top-link {% if ep == 'capture_page' %}active{% endif %}" href="{{ url_for('capture_page') }}"><i class="bi bi-camera"></i> New Receipt</a>
+                <a class="top-link {% if ep in ('view_expenses', 'edit_expense', 'view_expense_items') %}active{% endif %}" href="{{ url_for('view_expenses') }}"><i class="bi bi-list-check"></i> Expenses</a>
+                <a class="top-link {% if ep == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt"></i> Locations</a>
+                <a class="top-link {% if ep in ('bulk_upload_page', 'bulk_upload_receipts', 'bulk_upload_resume') %}active{% endif %}" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files"></i> Bulk Upload</a>
+                <a class="top-link {% if ep == 'issue_dashboard' %}active{% endif %}" href="{{ url_for('issue_dashboard') }}"><i class="bi bi-exclamation-diamond"></i> Issues</a>
+            </nav>
+            <div class="dropdown">
+                <button class="top-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-label="Account menu">
+                    <i class="bi bi-person-circle"></i> <span class="d-none d-md-inline">{{ current_user.username }}</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><h6 class="dropdown-header">{{ current_user.username }}</h6></li>
+                    <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='excel') }}"><i class="bi bi-file-earmark-excel text-success me-2"></i>Export all to Excel</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='csv') }}"><i class="bi bi-file-earmark-text me-2"></i>Export all to CSV</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-2"></i>Log out</a></li>
                 </ul>
-                
-                <ul class="navbar-nav">
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-download"></i> Export
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='excel') }}">
-                                <i class="bi bi-file-earmark-excel text-success"></i> Export to Excel
-                            </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='csv') }}">
-                                <i class="bi bi-file-earmark-text"></i> Export to CSV
-                            </a></li>
-                        </ul>
-                    </li>
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle"></i> {{ current_user.username }}
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="{{ url_for('logout') }}">
-                                <i class="bi bi-box-arrow-right"></i> Logout
-                            </a></li>
-                        </ul>
-                    </li>
-                </ul>
-                {% endif %}
             </div>
+            {% endif %}
+        </div>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-stack">
+            {% for category, message in messages %}
+                <div class="alert alert-{{ 'danger' if category == 'error' else 'success' if category == 'success' else 'warning' }} alert-dismissible fade show mb-2" role="alert">
+                    <i class="bi bi-{{ 'x-circle' if category == 'error' else 'check-circle' if category == 'success' else 'exclamation-circle' }} me-2"></i>{{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    {% endwith %}
+
+    <main class="app-main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer"><div class="container"><p class="mb-0">Receipt Reader &middot; Keep your business expenses organized</p></div></footer>
+
+    {% block bottom_nav %}
+    {% if current_user.is_authenticated %}
+    <nav class="tabbar" aria-label="Main">
+        <a class="tab {% if ep == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-house{{ '-fill' if ep == 'index' }}"></i>Home</a>
+        <a class="tab {% if ep in ('view_expenses', 'edit_expense', 'view_expense_items') %}active{% endif %}" href="{{ url_for('view_expenses') }}"><i class="bi bi-list-ul"></i>Expenses</a>
+        <a class="tab tab-fab" href="{{ url_for('capture_page') }}" aria-label="New receipt"><span><i class="bi bi-camera-fill"></i></span><small>Scan</small></a>
+        <a class="tab {% if ep == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt{{ '-fill' if ep == 'locations_page' }}"></i>Stores</a>
+        <div class="dropup">
+            <button class="tab w-100" type="button" data-bs-toggle="dropdown" aria-label="More"><i class="bi bi-three-dots"></i>More</button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><a class="dropdown-item" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files me-2"></i>Bulk upload</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('issue_dashboard') }}"><i class="bi bi-exclamation-diamond me-2"></i>Issues</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='excel') }}"><i class="bi bi-file-earmark-excel me-2"></i>Export Excel</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='csv') }}"><i class="bi bi-file-earmark-text me-2"></i>Export CSV</a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-2"></i>Log out</a></li>
+            </ul>
         </div>
     </nav>
+    {% endif %}
+    {% endblock %}
 
-    <!-- Flash Messages -->
-    <div class="container mt-3">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' if category == 'success' else 'warning' }} alert-dismissible fade show" role="alert">
-                        <i class="bi bi-{{ 'x-circle' if category == 'error' else 'check-circle' if category == 'success' else 'exclamation-circle' }} me-2"></i>
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-    </div>
-
-    <!-- Main Content -->
-    <div class="main-content">
-        {% block content %}{% endblock %}
-    </div>
-
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="container">
-            <p class="mb-0">Receipt Reader &middot; Keep your business expenses organized</p>
-        </div>
-    </footer>
-
-    <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    
     <script>
-        // File upload functionality
-        function setupFileUpload() {
-            const fileInput = document.getElementById('file');
-            const uploadArea = document.querySelector('.upload-area');
-            
-            if (!fileInput || !uploadArea) return;
-            
-            uploadArea.addEventListener('dragover', function(e) {
-                e.preventDefault();
-                uploadArea.classList.add('dragover');
-            });
-            
-            uploadArea.addEventListener('dragleave', function(e) {
-                e.preventDefault();
-                uploadArea.classList.remove('dragover');
-            });
-            
-            uploadArea.addEventListener('drop', function(e) {
-                e.preventDefault();
-                uploadArea.classList.remove('dragover');
-                const files = e.dataTransfer.files;
-                if (files.length > 0) {
-                    fileInput.files = files;
-                    updateFileName(files[0].name);
-                }
-            });
-            
-            fileInput.addEventListener('change', function(e) {
-                if (e.target.files.length > 0) {
-                    updateFileName(e.target.files[0].name);
-                }
-            });
-            
-            function updateFileName(fileName) {
-                const fileNameDisplay = document.getElementById('fileName');
-                if (fileNameDisplay) {
-                    fileNameDisplay.textContent = fileName;
-                    fileNameDisplay.style.color = 'var(--success)';
-                }
-            }
-        }
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            setupFileUpload();
-            
-            // Auto-hide alerts
-            setTimeout(function() {
-                document.querySelectorAll('.alert').forEach(function(alert) {
-                    new bootstrap.Alert(alert).close();
-                });
+        // Auto-dismiss flash messages (not inline page alerts)
+        document.addEventListener('DOMContentLoaded', function () {
+            setTimeout(function () {
+                document.querySelectorAll('.flash-stack .alert').forEach(function (a) { bootstrap.Alert.getOrCreateInstance(a).close(); });
             }, 5000);
         });
     </script>
-    
     {% block scripts %}{% endblock %}
 </body>
 </html>

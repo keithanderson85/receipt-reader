@@ -4,220 +4,154 @@
 
 {% block content %}
 {% set total_filtered = expenses | sum(attribute=2) if expenses else 0 %}
-{% set cat_names = {
-    'inventory': 'Inventory',
-    'office_supplies': 'Office Supplies',
-    'travel': 'Travel',
-    'meals': 'Meals & Entertainment',
-    'equipment': 'Equipment',
-    'advertising': 'Advertising',
-    'professional_services': 'Professional Services',
-    'utilities': 'Utilities',
-    'rent': 'Rent',
-    'insurance': 'Insurance',
-    'other': 'Other'
+{% set month_names = [('1','January'),('2','February'),('3','March'),('4','April'),('5','May'),('6','June'),('7','July'),('8','August'),('9','September'),('10','October'),('11','November'),('12','December')] %}
+{% set active = {
+    'q': current_search or '', 'category': current_category or '', 'location': current_location or '',
+    'month': current_month or '', 'start_date': current_start_date or '', 'end_date': current_end_date or '',
+    'year': current_year or '', 'sort': current_sort
+} %}
+{% set sheet_filters = [current_category, current_location, current_month, current_start_date, current_end_date] | select | list | length %}
+{% set export_args = {
+    'year': current_year, 'category': current_category, 'month': current_month, 'start_date': current_start_date,
+    'end_date': current_end_date, 'location': current_location, 'q': current_search
 } %}
 
-<!-- Page Header -->
-<div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-3">
-    <div>
-        <h1>Expenses</h1>
-        <p>View and manage your business expenses</p>
-    </div>
-    <div class="d-flex gap-2">
-        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-primary">
-            <i class="bi bi-plus-lg me-1"></i> Add Receipts
-        </a>
-        <button class="btn btn-outline-secondary" id="pushAllBtn" onclick="pushAllToDashboard()">
-            <i class="bi bi-send me-1"></i> Sync to Dashboard
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 fw-bold mb-0" style="letter-spacing:-.03em;">Expenses</h1>
+    <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="dropdown" aria-label="Export and sync">
+            <i class="bi bi-download me-1"></i> Export
         </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='excel', **export_args) }}"><i class="bi bi-file-earmark-excel text-success me-2"></i>Excel{% if sheet_filters or current_year or current_search %} (filtered){% endif %}</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='csv', **export_args) }}"><i class="bi bi-file-earmark-text me-2"></i>CSV{% if sheet_filters or current_year or current_search %} (filtered){% endif %}</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><button class="dropdown-item" type="button" id="pushAllBtn" onclick="pushAllToDashboard()"><i class="bi bi-send me-2"></i>Sync to dashboard</button></li>
+        </ul>
     </div>
 </div>
-<script>
-function pushAllToDashboard() {
-    const btn = document.getElementById('pushAllBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Syncing...';
-    fetch('/api/push_all_receipts', {
-        method: 'POST',
-        headers: {'X-CSRFToken': '{{ csrf_token() if csrf_token is defined else "" }}'},
-        credentials: 'same-origin'
-    })
-    .then(r => r.json())
-    .then(data => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-send me-1"></i> Sync to Dashboard';
-        if (data.success) {
-            alert(`Done! Pushed: ${data.pushed}, Duplicates skipped: ${data.skipped_duplicates}, Errors: ${data.errors.length}`);
-        } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
-        }
-    })
-    .catch(e => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-send me-1"></i> Sync to Dashboard';
-        alert('Request failed: ' + e);
-    });
-}
-</script>
 
-<!-- Year Filter Pills -->
-<div class="year-filter">
-    <span class="year-filter-label">Filter by year:</span>
-    <a href="{{ url_for('view_expenses', category=current_category, sort=current_sort) }}" 
-       class="year-pill {% if not current_year %}active{% endif %}">All Years</a>
+<!-- Search + filter button -->
+<form method="GET" action="{{ url_for('view_expenses') }}" id="filterForm" class="searchbar mb-2">
+    <input type="search" class="form-control" placeholder="Search merchant…" name="q" value="{{ current_search or '' }}" aria-label="Search merchant" enterkeyhint="search">
+    <button type="button" class="btn btn-outline-secondary position-relative" data-bs-toggle="offcanvas" data-bs-target="#filterSheet" aria-label="Filters">
+        <i class="bi bi-sliders"></i>
+        {% if sheet_filters %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-primary">{{ sheet_filters }}</span>{% endif %}
+    </button>
+    {% if current_year %}<input type="hidden" name="year" value="{{ current_year }}">{% endif %}
+</form>
+
+<!-- Year chips -->
+{% if available_years %}
+<div class="chip-scroll">
+    <a href="{{ url_for('view_expenses', **dict(active, year='')) }}" class="chip {% if not current_year %}active{% endif %}">All years</a>
     {% for year in available_years %}
-    <a href="{{ url_for('view_expenses', year=year, category=current_category, sort=current_sort) }}" 
-       class="year-pill {% if year == current_year %}active{% endif %}">{{ year }}</a>
+    <a href="{{ url_for('view_expenses', **dict(active, year=year)) }}" class="chip {% if year == current_year %}active{% endif %}">{{ year }}</a>
     {% endfor %}
 </div>
+{% endif %}
 
-<!-- Summary Bar -->
-<div class="summary-bar">
-    <div class="summary-stat">
-        <div class="summary-stat-value">{{ expenses|length }}</div>
-        <div class="summary-stat-label">Expenses</div>
-    </div>
-    <div class="summary-stat">
-        <div class="summary-stat-value">${{ "%.2f"|format(total_filtered) }}</div>
-        <div class="summary-stat-label">Total</div>
-    </div>
-    <div class="d-flex gap-2 flex-wrap">
-        <a href="{{ url_for('export_expenses', format='excel', year=current_year, category=current_category, month=current_month, start_date=current_start_date, end_date=current_end_date, location=current_location, q=current_search) }}" class="btn btn-outline-secondary btn-sm">
-            <i class="bi bi-file-earmark-excel"></i> Excel
-        </a>
-        <a href="{{ url_for('export_expenses', format='csv', year=current_year, category=current_category, month=current_month, start_date=current_start_date, end_date=current_end_date, location=current_location, q=current_search) }}" class="btn btn-outline-secondary btn-sm">
-            <i class="bi bi-file-earmark-text"></i> CSV
-        </a>
-    </div>
+<!-- Active filters -->
+{% if sheet_filters or current_search %}
+<div class="d-flex flex-wrap gap-2 mb-2">
+    {% if current_search %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, q='')) }}">“{{ current_search }}” <i class="bi bi-x"></i></a>{% endif %}
+    {% if current_category %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, category='')) }}">{{ cat_short.get(current_category, current_category) }} <i class="bi bi-x"></i></a>{% endif %}
+    {% if current_location %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, location='')) }}">{{ current_location }} <i class="bi bi-x"></i></a>{% endif %}
+    {% if current_month %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, month='')) }}">{{ month_names[current_month|int - 1][1] }} <i class="bi bi-x"></i></a>{% endif %}
+    {% if current_start_date or current_end_date %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, start_date='', end_date='')) }}">{{ current_start_date or '…' }} → {{ current_end_date or '…' }} <i class="bi bi-x"></i></a>{% endif %}
+    <a class="small align-self-center text-decoration-none" href="{{ url_for('view_expenses', year=current_year) }}">Clear all</a>
+</div>
+{% endif %}
+
+<div class="d-flex justify-content-between align-items-baseline my-3">
+    <span class="text-secondary small">{{ expenses|length }} expense{{ '' if expenses|length == 1 else 's' }}</span>
+    <span class="fw-bold fs-5" style="letter-spacing:-.02em;">${{ "{:,.2f}".format(total_filtered) }}</span>
 </div>
 
-<!-- Filters -->
-<div class="card mb-4 border-0 shadow-sm">
-    <div class="card-body p-3">
-        <form method="GET" action="{{ url_for('view_expenses') }}" id="filterForm" class="row g-2 align-items-end">
-            <!-- Search -->
-            <div class="col-md-3">
-                <label class="form-label small fw-semibold mb-1">Search Merchant</label>
-                <input type="text" class="form-control form-control-sm" placeholder="e.g. Metro Pawn, Home Depot..." name="q" value="{{ current_search or '' }}">
+<!-- List -->
+{% if expenses %}
+<div class="row-list">
+    {% for e in expenses %}
+    <a href="{{ url_for('edit_expense', expense_id=e[0]) }}" class="row-item">
+        <span class="row-main">
+            <div class="row-title">{{ e[1] }}</div>
+            <div class="row-meta">
+                <span class="category-tag cat-{{ e[4] }}">{{ cat_short.get(e[4], e[4]) }}</span>
+                <span>{{ e[3] }}</span>
+                {% if e[13] %}<span><i class="bi bi-list-ul"></i> {{ e[13] }} item{{ '' if e[13] == 1 else 's' }}</span>{% endif %}
+                {% if e[11] %}<span class="text-truncate"><i class="bi bi-geo-alt"></i> {{ e[11] }}</span>{% endif %}
             </div>
+        </span>
+        <span class="row-amount">${{ "{:,.2f}".format(e[2]) }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card"><div class="empty-state">
+    <i class="bi bi-receipt"></i>
+    <h5>No expenses found</h5>
+    <p class="mb-3">{% if sheet_filters or current_search or current_year %}Try adjusting or clearing your filters.{% else %}Scan your first receipt to get started.{% endif %}</p>
+    <a href="{{ url_for('capture_page') }}" class="btn btn-success"><i class="bi bi-camera-fill me-1"></i> New receipt</a>
+</div></div>
+{% endif %}
 
-            <!-- Location Filter -->
-            <div class="col-md-3">
-                <label class="form-label small fw-semibold mb-1">Location / Store</label>
-                <select name="location" class="form-select form-select-sm" onchange="this.form.submit()">
-                    <option value="">All Locations</option>
+<!-- Filter sheet (inputs belong to #filterForm via the form attribute) -->
+<div class="offcanvas offcanvas-bottom" tabindex="-1" id="filterSheet" aria-labelledby="filterSheetLabel" style="height:auto; max-height:88vh; border-radius:20px 20px 0 0;">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title fw-bold" id="filterSheetLabel">Filters</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="row g-3">
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="f_location">Store</label>
+                <select id="f_location" name="location" form="filterForm" class="form-select">
+                    <option value="">All stores</option>
                     {% for loc_name in known_locations %}
                     <option value="{{ loc_name }}" {% if loc_name == current_location %}selected{% endif %}>{{ loc_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-
-            <!-- Category -->
-            <div class="col-md-2">
-                <label class="form-label small fw-semibold mb-1">Category</label>
-                <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
-                    <option value="">All Categories</option>
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="f_category">Category</label>
+                <select id="f_category" name="category" form="filterForm" class="form-select">
+                    <option value="">All categories</option>
                     {% for cat_code, cat_name in categories %}
                     <option value="{{ cat_code }}" {% if cat_code == current_category %}selected{% endif %}>{{ cat_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-
-            <!-- Month Filter -->
-            <div class="col-md-2">
-                <label class="form-label small fw-semibold mb-1">Month</label>
-                <select name="month" class="form-select form-select-sm" onchange="this.form.submit()">
-                    <option value="">All Months</option>
-                    {% for m_code, m_name in [('1','Jan'),('2','Feb'),('3','Mar'),('4','Apr'),('5','May'),('6','Jun'),('7','Jul'),('8','Aug'),('9','Sep'),('10','Oct'),('11','Nov'),('12','Dec')] %}
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="f_month">Month</label>
+                <select id="f_month" name="month" form="filterForm" class="form-select">
+                    <option value="">Any</option>
+                    {% for m_code, m_name in month_names %}
                     <option value="{{ m_code }}" {% if m_code == current_month %}selected{% endif %}>{{ m_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-
-            <!-- Sort -->
-            <div class="col-md-2">
-                <label class="form-label small fw-semibold mb-1">Sort</label>
-                <select name="sort" class="form-select form-select-sm" onchange="this.form.submit()">
-                    <option value="date_desc" {% if current_sort == 'date_desc' %}selected{% endif %}>Newest First</option>
-                    <option value="date_asc" {% if current_sort == 'date_asc' %}selected{% endif %}>Oldest First</option>
-                    <option value="amount_desc" {% if current_sort == 'amount_desc' %}selected{% endif %}>Highest Amount</option>
-                    <option value="amount_asc" {% if current_sort == 'amount_asc' %}selected{% endif %}>Lowest Amount</option>
-                    <option value="merchant" {% if current_sort == 'merchant' %}selected{% endif %}>Merchant A-Z</option>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="f_sort">Sort by</label>
+                <select id="f_sort" name="sort" form="filterForm" class="form-select">
+                    <option value="date_desc" {% if current_sort == 'date_desc' %}selected{% endif %}>Newest</option>
+                    <option value="date_asc" {% if current_sort == 'date_asc' %}selected{% endif %}>Oldest</option>
+                    <option value="amount_desc" {% if current_sort == 'amount_desc' %}selected{% endif %}>Highest</option>
+                    <option value="amount_asc" {% if current_sort == 'amount_asc' %}selected{% endif %}>Lowest</option>
+                    <option value="merchant" {% if current_sort == 'merchant' %}selected{% endif %}>Store A–Z</option>
                 </select>
             </div>
-
-            <!-- Date Period Range Accordion / Inputs -->
-            <div class="col-12 mt-2 pt-2 border-top d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <span class="small text-muted fw-semibold"><i class="bi bi-calendar-range me-1"></i> Custom Period:</span>
-                    <input type="date" class="form-control form-control-sm" style="width: 140px;" name="start_date" value="{{ current_start_date or '' }}" title="Start Date">
-                    <span class="text-muted small">to</span>
-                    <input type="date" class="form-control form-control-sm" style="width: 140px;" name="end_date" value="{{ current_end_date or '' }}" title="End Date">
-                </div>
-                <div class="d-flex gap-2">
-                    <button type="submit" class="btn btn-primary btn-sm px-3">
-                        <i class="bi bi-funnel-fill me-1"></i> Apply Filters
-                    </button>
-                    <a href="{{ url_for('view_expenses') }}" class="btn btn-outline-secondary btn-sm">Reset</a>
-                </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="f_start">From</label>
+                <input type="date" id="f_start" name="start_date" form="filterForm" class="form-control" value="{{ current_start_date or '' }}">
             </div>
-            {% if current_year %}<input type="hidden" name="year" value="{{ current_year }}">{% endif %}
-        </form>
-    </div>
-</div>
-
-<!-- Expense List -->
-{% if expenses %}
-    {% for expense in expenses %}
-    <div class="expense-card" onclick="window.location='{{ url_for('edit_expense', expense_id=expense[0]) }}'">
-        <div class="d-flex justify-content-between align-items-start">
-            <div class="flex-grow-1">
-                <div class="expense-merchant">{{ expense[1] }}</div>
-                <div class="expense-meta mt-1">
-                    <span class="category-tag cat-{{ expense[4] }}">{{ cat_names.get(expense[4], expense[4]) }}</span>
-                    <span class="ms-2"><i class="bi bi-calendar3 small me-1"></i>{{ expense[3] }}</span>
-                    {% if expense[11] %}
-                    <span class="ms-2"><i class="bi bi-geo-alt small me-1"></i>{{ expense[11] }}</span>
-                    {% endif %}
-                    {% if expense[12] %}
-                    <div class="small text-muted mt-1"><i class="bi bi-house-door small me-1"></i>{{ expense[12] }}</div>
-                    {% endif %}
-                    {% if expense[5] %}
-                    <span class="ms-2 text-muted">· {{ expense[5][:40] }}{% if expense[5]|length > 40 %}...{% endif %}</span>
-                    {% endif %}
-                </div>
-            </div>
-            <div class="text-end">
-                <div class="expense-amount mb-1">${{ "%.2f"|format(expense[2]) }}</div>
-                <form action="{{ url_for('reprocess_expense', expense_id=expense[0]) }}" method="post" class="d-inline" onsubmit="return confirm('Re-run AI logic for this receipt? (Uses credits)')">
-                    <button type="submit" class="btn btn-link btn-sm p-0 text-muted opacity-50 hover-opacity-100" title="Reprocess Receipt" onclick="event.stopPropagation();">
-                        <i class="bi bi-arrow-repeat"></i> Reprocess
-                    </button>
-                </form>
+            <div class="col-6 col-md-3">
+                <label class="form-label" for="f_end">To</label>
+                <input type="date" id="f_end" name="end_date" form="filterForm" class="form-control" value="{{ current_end_date or '' }}">
             </div>
         </div>
-    </div>
-    {% endfor %}
-{% else %}
-    <div class="empty-state">
-        <i class="bi bi-receipt"></i>
-        <h5>No expenses found</h5>
-        <p>{% if current_year or current_category %}Try adjusting your filters{% else %}Upload your first receipt to get started{% endif %}</p>
-    </div>
-{% endif %}
-
-<!-- Receipt Preview Modal -->
-<div class="modal fade" id="receiptModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Receipt Preview</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body text-center">
-                <img src="" id="receiptImage" class="img-fluid" style="max-height:75vh;">
-            </div>
+        <div class="d-flex gap-2 mt-4">
+            <a href="{{ url_for('view_expenses', year=current_year) }}" class="btn btn-outline-secondary btn-tap">Reset</a>
+            <button type="submit" form="filterForm" class="btn btn-primary btn-tap flex-grow-1">Show results</button>
         </div>
     </div>
 </div>
@@ -225,19 +159,26 @@ function pushAllToDashboard() {
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Expense card click is handled by onclick
-    // Add keyboard accessibility
-    document.querySelectorAll('.expense-card').forEach(card => {
-        card.setAttribute('role', 'button');
-        card.setAttribute('tabindex', '0');
-        card.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                this.click();
-            }
-        });
-    });
-});
+function pushAllToDashboard() {
+    const btn = document.getElementById('pushAllBtn');
+    const label = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Syncing…';
+    fetch('/api/push_all_receipts', {
+        method: 'POST',
+        headers: {'X-CSRFToken': '{{ csrf_token() if csrf_token is defined else "" }}'},
+        credentials: 'same-origin'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Done! Pushed: ${data.pushed}, Duplicates skipped: ${data.skipped_duplicates}, Errors: ${data.errors.length}`);
+        } else {
+            alert('Error: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(e => alert('Request failed: ' + e))
+    .finally(() => { btn.disabled = false; btn.innerHTML = label; });
+}
 </script>
 {% endblock %}
