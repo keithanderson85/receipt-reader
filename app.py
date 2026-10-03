@@ -49,6 +49,10 @@ bcrypt = Bcrypt(app)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 BULK_REVIEW_FOLDER = os.path.join(app.root_path, 'bulk_reviews')
 os.makedirs(BULK_REVIEW_FOLDER, exist_ok=True)
+# Pending single-receipt OCR results live on disk: long receipts overflow the 4KB session cookie.
+OCR_CACHE_FOLDER = os.path.join(BULK_REVIEW_FOLDER, 'ocr')
+os.makedirs(OCR_CACHE_FOLDER, exist_ok=True)
+MAX_CAPTURE_PHOTOS = 8
 
 # Error handlers
 @app.errorhandler(413)
@@ -915,6 +919,59 @@ def index():
                          location_breakdown=location_breakdown_month,
                          location_breakdown_all=location_breakdown_all)
 
+def _ocr_cache_path(filename):
+    return os.path.join(OCR_CACHE_FOLDER, f'{current_user.id}_{secure_filename(filename)}.json')
+
+
+def stage_ocr_for_review(ocr_result, filename, file_hash):
+    """Clean an OCR result, flag duplicates, park it on disk and return the review URL."""
+    ocr_result['merchant_name'] = clean_merchant_name(ocr_result.get('merchant_name', ''))
+    ocr_result['location'] = correct_location_by_zip(ocr_result.get('address', ''), ocr_result.get('location', ''))
+
+    location_match = find_matching_location(ocr_result.get('address'))
+    if location_match:
+        ocr_result['merchant_name'] = location_match[1]
+        if location_match[2]:
+            ocr_result['category'] = location_match[2]
+        ocr_result['location_match'] = {
+            'id': location_match[0],
+            'name': location_match[1],
+            'category': location_match[2]
+        }
+
+    duplicates = None
+    if ocr_result.get('merchant_name') and ocr_result.get('amount'):
+        duplicates = check_for_duplicates(
+            ocr_result['merchant_name'],
+            ocr_result['amount'],
+            ocr_result.get('date'),
+            file_hash,
+            current_user.id
+        )
+
+    ocr_result['file_hash'] = file_hash
+    ocr_result['duplicates'] = duplicates
+    if hasattr(ocr_result.get('date'), 'strftime'):
+        ocr_result['date'] = ocr_result['date'].strftime('%Y-%m-%d')
+
+    with open(_ocr_cache_path(filename), 'w', encoding='utf-8') as handle:
+        json.dump(ocr_result, handle, default=str)
+    return url_for('review_receipt', filename=filename)
+
+
+def pop_staged_ocr(filename):
+    path = _ocr_cache_path(filename)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as handle:
+        data = json.load(handle)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return data
+
+
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload_receipt():
@@ -986,60 +1043,11 @@ def process_receipt_ajax():
                 'error': ocr_result.get('error', 'OCR processing failed')
             })
         
-        # Clean and correct data
-        ocr_result['merchant_name'] = clean_merchant_name(ocr_result.get('merchant_name', ''))
-        ocr_result['location'] = correct_location_by_zip(ocr_result.get('address', ''), ocr_result.get('location', ''))
-
-        # Try to match address to a known location for auto-renaming
-        location_match = find_matching_location(ocr_result.get('address'))
-        if location_match:
-            print(f"DEBUG: Found matching location: {location_match[1]}")
-            ocr_result['merchant_name'] = location_match[1]
-            if location_match[2]:
-                ocr_result['category'] = location_match[2]
-            ocr_result['location_match'] = {
-                'id': location_match[0],
-                'name': location_match[1],
-                'category': location_match[2]
-            }
-
-        # Check for duplicates if we have good data
-        duplicates = None
-        if ocr_result.get('merchant_name') and ocr_result.get('amount'):
-            duplicates = check_for_duplicates(
-                ocr_result['merchant_name'], 
-                ocr_result['amount'], 
-                ocr_result['date'],
-                file_hash,
-                current_user.id
-            )
-        
-        # Add file hash and duplicates to OCR result
-        ocr_result['file_hash'] = file_hash
-        ocr_result['duplicates'] = duplicates
-
-        # Store results in session for the edit page (handle date serialization)
-        if 'date' in ocr_result and ocr_result['date']:
-            # Convert date to string if it's a date object
-            if hasattr(ocr_result['date'], 'strftime'):
-                ocr_result['date'] = ocr_result['date'].strftime('%Y-%m-%d')
-        
-        session[f'ocr_result_{filename}'] = ocr_result
-        
-        # Store duplicate info in session for persistence
-        if duplicates and (duplicates['exact_file'] or duplicates['exact_match'] or duplicates['similar']):
-            session[f'duplicate_warning_{filename}'] = {
-                'duplicates': duplicates,
-                'merchant': ocr_result['merchant_name'],
-                'amount': ocr_result['amount'],
-                'date': ocr_result['date']
-            }
-        
         return jsonify({
             'success': True,
-            'redirect_url': url_for('review_receipt', filename=filename)
+            'redirect_url': stage_ocr_for_review(ocr_result, filename, file_hash)
         })
-        
+
     except Exception as e:
         print(f"Error in AJAX processing: {str(e)}")
         import traceback
@@ -1056,18 +1064,87 @@ def process_receipt_ajax():
         
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/capture')
+@login_required
+def capture_page():
+    """Mobile-first capture screen: take one or many photos of a receipt and read them together."""
+    return render_template('capture.html', form=FlaskForm(), max_photos=MAX_CAPTURE_PHOTOS)
+
+
+@app.route('/capture/process', methods=['POST'])
+@login_required
+def capture_process():
+    """Read 1..N ordered photos as a single receipt and return the review URL."""
+    if not FlaskForm().validate_on_submit():
+        return jsonify({'success': False, 'error': 'Session expired - reload the page and try again.'}), 400
+
+    uploads = [f for f in request.files.getlist('photos') if f and f.filename]
+    if not uploads:
+        return jsonify({'success': False, 'error': 'Add at least one photo.'}), 400
+    if len(uploads) > MAX_CAPTURE_PHOTOS:
+        return jsonify({'success': False, 'error': f'Up to {MAX_CAPTURE_PHOTOS} photos per receipt.'}), 400
+
+    batch = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    photo_paths, photo_hashes, notes, cleanup = [], [], [], []
+
+    try:
+        for position, upload in enumerate(uploads, 1):
+            ext = os.path.splitext(secure_filename(upload.filename))[1].lower()
+            if ext not in ('.jpg', '.jpeg', '.png'):
+                return jsonify({'success': False, 'error': f'Photo {position}: only JPG or PNG images are supported.'}), 400
+
+            path = os.path.join(app.config['UPLOAD_FOLDER'], f'{batch}_{position}{ext}')
+            upload.save(path)
+            cleanup.append(path)
+
+            digest = calculate_file_hash(path)
+            if digest in photo_hashes:
+                first = photo_hashes.index(digest) + 1
+                notes.append({'level': 'warning',
+                              'message': f'Photo {position} is an exact copy of photo {first} - skipped.'})
+                os.remove(path)
+                continue
+            photo_hashes.append(digest)
+            photo_paths.append(path)
+
+        if len(photo_paths) == 1:
+            ocr_result = receipt_ocr.process_receipt(photo_paths[0])
+            file_hash = photo_hashes[0]
+        else:
+            ocr_result = receipt_ocr.process_receipt(photo_paths[0], photo_paths=photo_paths)
+            file_hash = hashlib.sha256('|'.join(photo_hashes).encode()).hexdigest()
+
+        if not ocr_result.get('success', False):
+            raise RuntimeError(ocr_result.get('error', 'OCR processing failed'))
+
+        filename = (ocr_result.get('processed_filename') or ocr_result.get('converted_filename')
+                    or os.path.basename(photo_paths[0]))
+        ocr_result['photo_notes'] = notes + ocr_result.get('photo_notes', [])
+        return jsonify({'success': True, 'redirect_url': stage_ocr_for_review(ocr_result, filename, file_hash)})
+
+    except Exception as e:
+        app.logger.exception('Capture processing failed')
+        leftovers = list(cleanup)
+        if photo_paths:
+            leftovers.append(os.path.splitext(photo_paths[0])[0] + '_receipt.jpg')  # stitched image
+        for path in leftovers:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/review/<filename>')
 @login_required 
 def review_receipt(filename):
     """Review page for processed receipt."""
     # Get OCR results from session
-    ocr_result = session.get(f'ocr_result_{filename}')
+    ocr_result = pop_staged_ocr(filename)
     if not ocr_result:
         flash('Receipt processing data not found. Please upload again.', 'error')
         return redirect(url_for('index'))
-    
-    # Clean up session data
-    session.pop(f'ocr_result_{filename}', None)
     
     # Get user's saved locations for quick selection
     conn = sqlite3.connect('receipts.db')

@@ -13,8 +13,11 @@
         <a href="{{ url_for('locations_page') }}" class="btn btn-outline-primary shadow-sm">
             <i class="bi bi-geo-alt"></i> <span class="d-none d-sm-inline">Locations</span>
         </a>
-        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-primary shadow-sm">
-            <i class="bi bi-plus-lg"></i> Add <span class="d-none d-sm-inline">Receipts</span>
+        <a href="{{ url_for('bulk_upload_page') }}" class="btn btn-outline-primary shadow-sm">
+            <i class="bi bi-files"></i> <span class="d-none d-sm-inline">Bulk</span>
+        </a>
+        <a href="{{ url_for('capture_page') }}" class="btn btn-success shadow-sm">
+            <i class="bi bi-camera-fill"></i> New <span class="d-none d-sm-inline">Receipt</span>
         </a>
     </div>
 </div>

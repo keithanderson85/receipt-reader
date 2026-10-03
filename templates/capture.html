@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}New Receipt - Receipt Reader{% endblock %}
+
+{% block content %}
+<style>
+    .capture-wrap { max-width: 640px; margin: 0 auto; padding-bottom: 7rem; }
+    .capture-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+    .capture-actions .btn { padding: 1.1rem .5rem; font-weight: 600; border-radius: var(--radius-lg); }
+    .capture-actions .btn i { display: block; font-size: 1.6rem; margin-bottom: .25rem; }
+    .photo-card {
+        display: flex; align-items: center; gap: .75rem; padding: .5rem;
+        background: var(--bg-card); border: 1px solid var(--border);
+        border-radius: var(--radius-md); box-shadow: var(--shadow-sm);
+    }
+    .photo-card img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; background: var(--bg-page); }
+    .photo-num {
+        width: 28px; height: 28px; border-radius: 50%; background: var(--primary-light); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: .85rem; flex: none;
+    }
+    .photo-meta { flex: 1; min-width: 0; font-size: .85rem; color: var(--text-secondary); }
+    .capture-bar {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030;
+        background: rgba(255,255,255,.96); backdrop-filter: blur(8px);
+        border-top: 1px solid var(--border); padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom));
+    }
+    .capture-bar .inner { max-width: 640px; margin: 0 auto; }
+    .reading-overlay {
+        position: fixed; inset: 0; z-index: 2000; background: rgba(15,23,42,.8);
+        display: none; align-items: center; justify-content: center; color: #fff; text-align: center; padding: 2rem;
+    }
+    .reading-overlay.show { display: flex; }
+</style>
+
+<div class="capture-wrap">
+    <div class="page-header mb-3">
+        <h1 class="mb-1">New receipt</h1>
+        <p class="text-secondary mb-0">Long receipt? Take several photos, top to bottom, with a little overlap. They're read together as one receipt.</p>
+    </div>
+
+    <div class="capture-actions mb-3">
+        <button type="button" class="btn btn-primary" id="takeBtn">
+            <i class="bi bi-camera-fill"></i> Take photo
+        </button>
+        <button type="button" class="btn btn-outline-primary" id="pickBtn">
+            <i class="bi bi-images"></i> From gallery
+        </button>
+    </div>
+
+    <!-- camera: one shot per tap; gallery: several at once -->
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" class="d-none">
+    <input type="file" id="galleryInput" accept="image/jpeg,image/png" multiple class="d-none">
+
+    <div id="notice" class="alert alert-warning py-2 small d-none" role="alert"></div>
+    <div id="photoList" class="d-grid gap-2"></div>
+
+    <div id="emptyState" class="text-center text-muted py-5">
+        <i class="bi bi-receipt" style="font-size: 3rem;"></i>
+        <p class="mt-2 mb-0">No photos yet. Tap <strong>Take photo</strong> to start.</p>
+    </div>
+</div>
+
+<div class="capture-bar">
+    <div class="inner d-flex gap-2">
+        <button type="button" class="btn btn-outline-secondary" id="clearBtn" disabled title="Start over">
+            <i class="bi bi-trash"></i>
+        </button>
+        <button type="button" class="btn btn-success btn-lg flex-grow-1" id="readBtn" disabled>
+            <i class="bi bi-lightning-charge-fill me-1"></i> <span id="readLabel">Read receipt</span>
+        </button>
+    </div>
+</div>
+
+<div class="reading-overlay" id="overlay">
+    <div>
+        <div class="spinner-border mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+        <h5 id="overlayTitle">Reading receipt…</h5>
+        <p class="mb-0 opacity-75" id="overlayText">This can take up to a minute for long receipts.</p>
+        <button type="button" class="btn btn-light mt-4 d-none" id="overlayClose">Back to photos</button>
+    </div>
+</div>
+
+<form id="csrfForm" class="d-none">{{ form.hidden_tag() }}</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const MAX_PHOTOS = {{ max_photos }};
+    const MAX_SIDE = 4096, MAX_PIXELS = 6e6;
+    const PROCESS_URL = {{ url_for('capture_process')|tojson }};
+
+    const $ = id => document.getElementById(id);
+    const list = $('photoList'), notice = $('notice'), overlay = $('overlay');
+    let photos = [];   // {blob, url, hash, w, h}
+
+    // ---- helpers ---------------------------------------------------------
+    function showNotice(msg) {
+        notice.textContent = msg;
+        notice.classList.remove('d-none');
+        clearTimeout(showNotice.t);
+        showNotice.t = setTimeout(() => notice.classList.add('d-none'), 6000);
+    }
+
+    // Shrink big camera photos before upload (keeps tall receipts readable).
+    async function shrink(file) {
+        try {
+            const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+            const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height),
+                                      Math.sqrt(MAX_PIXELS / (bmp.width * bmp.height)));
+            const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+            bmp.close && bmp.close();
+            const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+            return { blob, w, h };
+        } catch (e) {
+            return { blob: file, w: 0, h: 0 };   // let the server try the original
+        }
+    }
+
+    // SHA-256 where available (https), otherwise two FNV-1a passes.
+    async function fingerprint(blob) {
+        const buf = await blob.arrayBuffer();
+        if (window.crypto && crypto.subtle) {
+            const d = await crypto.subtle.digest('SHA-256', buf);
+            return Array.from(new Uint8Array(d), b => b.toString(16).padStart(2, '0')).join('');
+        }
+        const bytes = new Uint8Array(buf);
+        let h1 = 0x811c9dc5, h2 = 0x01000193;
+        for (let i = 0; i < bytes.length; i++) {
+            h1 = Math.imul(h1 ^ bytes[i], 16777619);
+            h2 = Math.imul(h2 + bytes[i], 2246822519) ^ (h2 >>> 13);
+        }
+        return `${bytes.length}-${(h1 >>> 0).toString(16)}-${(h2 >>> 0).toString(16)}`;
+    }
+
+    // ---- photo list ------------------------------------------------------
+    function render() {
+        list.replaceChildren();
+        photos.forEach((p, i) => {
+            const card = document.createElement('div');
+            card.className = 'photo-card';
+
+            const num = document.createElement('div');
+            num.className = 'photo-num'; num.textContent = i + 1;
+
+            const img = document.createElement('img');
+            img.src = p.url; img.alt = `Photo ${i + 1}`;
+
+            const meta = document.createElement('div');
+            meta.className = 'photo-meta';
+            meta.textContent = `${(p.blob.size / 1024 / 1024).toFixed(1)} MB` + (p.w ? ` · ${p.w}×${p.h}` : '');
+
+            const mk = (icon, label, fn, disabled) => {
+                const b = document.createElement('button');
+                b.type = 'button'; b.className = 'btn btn-sm btn-light'; b.disabled = !!disabled;
+                b.setAttribute('aria-label', label);
+                b.innerHTML = `<i class="bi ${icon}"></i>`;
+                b.addEventListener('click', fn);
+                return b;
+            };
+            const btns = document.createElement('div');
+            btns.className = 'd-flex gap-1';
+            btns.append(
+                mk('bi-arrow-up', 'Move up', () => move(i, -1), i === 0),
+                mk('bi-arrow-down', 'Move down', () => move(i, 1), i === photos.length - 1),
+                mk('bi-x-lg text-danger', 'Remove', () => remove(i))
+            );
+            card.append(num, img, meta, btns);
+            list.append(card);
+        });
+
+        const n = photos.length;
+        $('emptyState').classList.toggle('d-none', n > 0);
+        $('readBtn').disabled = n === 0;
+        $('clearBtn').disabled = n === 0;
+        $('readLabel').textContent = n > 1 ? `Read receipt (${n} photos)` : 'Read receipt';
+        $('takeBtn').disabled = $('pickBtn').disabled = n >= MAX_PHOTOS;
+    }
+
+    function move(i, d) {
+        [photos[i], photos[i + d]] = [photos[i + d], photos[i]];
+        render();
+    }
+    function remove(i) {
+        URL.revokeObjectURL(photos[i].url);
+        photos.splice(i, 1);
+        render();
+    }
+
+    async function addFiles(files) {
+        for (const file of files) {
+            if (photos.length >= MAX_PHOTOS) { showNotice(`Up to ${MAX_PHOTOS} photos per receipt.`); break; }
+            if (!file.type.startsWith('image/')) continue;
+            const { blob, w, h } = await shrink(file);
+            const hash = await fingerprint(blob);
+            const dup = photos.findIndex(p => p.hash === hash);
+            if (dup !== -1) {
+                showNotice(`That's the same image as photo ${dup + 1} - skipped.`);
+                continue;
+            }
+            photos.push({ blob, w, h, hash, url: URL.createObjectURL(blob) });
+            render();
+        }
+    }
+
+    // ---- wiring ----------------------------------------------------------
+    $('takeBtn').addEventListener('click', () => $('cameraInput').click());
+    $('pickBtn').addEventListener('click', () => $('galleryInput').click());
+    for (const id of ['cameraInput', 'galleryInput']) {
+        $(id).addEventListener('change', async e => {
+            const files = Array.from(e.target.files);
+            e.target.value = '';
+            await addFiles(files);
+        });
+    }
+    $('clearBtn').addEventListener('click', () => {
+        if (!confirm('Remove all photos and start over?')) return;
+        photos.forEach(p => URL.revokeObjectURL(p.url));
+        photos = [];
+        render();
+    });
+
+    function showOverlayError(msg) {
+        $('overlay').querySelector('.spinner-border').classList.add('d-none');
+        $('overlayTitle').textContent = "Couldn't read that receipt";
+        $('overlayText').textContent = msg;
+        $('overlayClose').classList.remove('d-none');
+    }
+    $('overlayClose').addEventListener('click', () => {
+        overlay.classList.remove('show');
+        $('overlay').querySelector('.spinner-border').classList.remove('d-none');
+        $('overlayTitle').textContent = 'Reading receipt…';
+        $('overlayText').textContent = 'This can take up to a minute for long receipts.';
+        $('overlayClose').classList.add('d-none');
+    });
+
+    $('readBtn').addEventListener('click', async () => {
+        if (!photos.length) return;
+        overlay.classList.add('show');
+        $('overlayTitle').textContent = photos.length > 1
+            ? `Reading ${photos.length} photos as one receipt…` : 'Reading receipt…';
+
+        const fd = new FormData($('csrfForm'));
+        photos.forEach((p, i) => fd.append('photos', p.blob, `photo_${i + 1}.jpg`));
+
+        try {
+            const resp = await fetch(PROCESS_URL, { method: 'POST', body: fd });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.ok && data.success) {
+                window.location.href = data.redirect_url;
+            } else {
+                showOverlayError(data.error || `Server error (${resp.status}). Please try again.`);
+            }
+        } catch (err) {
+            showOverlayError('Network error - check your connection and try again.');
+        }
+    });
+
+    render();
+})();
+</script>
+{% endblock %}

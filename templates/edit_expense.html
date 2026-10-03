@@ -325,6 +325,11 @@
 
     <div class="col-xl-4 order-1 order-xl-2 summary-column">
         <div class="summary-sticky">
+            {% for note in ocr_result.get('photo_notes', []) %}
+            <div class="alert alert-{{ 'warning' if note.level == 'warning' else 'info' }} shadow-sm py-2 small" role="alert">
+                <i class="bi bi-{{ 'exclamation-triangle-fill' if note.level == 'warning' else 'info-circle-fill' }} me-1"></i>{{ note.message }}
+            </div>
+            {% endfor %}
             {% if ocr_result.get('duplicates') and not editing %}
                 {% set duplicates = ocr_result.duplicates %}
                 {% if duplicates.exact_file or duplicates.exact_match or duplicates.similar %}

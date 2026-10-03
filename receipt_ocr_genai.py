@@ -9,6 +9,8 @@ import io
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
+from receipt_items import merge_photo_items, subtotal_note
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -131,6 +133,32 @@ class ReceiptOCRGenAI:
             logger.error(f"Failed to convert PDF to image: {e}")
             raise
 
+    def stitch_photos(self, photo_paths: List[str], out_path: str, target_width: int = 1400) -> str:
+        """Stack several photos of one long receipt into a single JPEG for archiving/display."""
+        if not PDF_PROCESSING_AVAILABLE:
+            raise ImportError("Image processing not available. Install with: pip install pillow")
+
+        from PIL import ImageOps
+        frames = []
+        try:
+            for path in photo_paths:
+                with Image.open(path) as raw:
+                    img = ImageOps.exif_transpose(raw).convert('RGB')
+                if img.width != target_width:
+                    img = img.resize((target_width, max(1, round(img.height * target_width / img.width))))
+                frames.append(img)
+
+            composite = Image.new('RGB', (target_width, sum(f.height for f in frames)), (255, 255, 255))
+            y = 0
+            for f in frames:
+                composite.paste(f, (0, y))
+                y += f.height
+            composite.save(out_path, 'JPEG', quality=85)
+            return out_path
+        finally:
+            for f in frames:
+                f.close()
+
     def convert_pdf_to_image(self, pdf_path: str) -> str:
         """Backward-compatible helper returning single/stitched image path."""
         stitched_path, _, _ = self.convert_pdf_to_images(pdf_path)
@@ -242,10 +270,15 @@ class ReceiptOCRGenAI:
             'note': 'Please try again later'
         }
 
-    def process_receipt(self, image_path: str) -> Dict:
-        """Main method to process a receipt image/PDF using OpenAI Vision API."""
+    def process_receipt(self, image_path: str, photo_paths: Optional[List[str]] = None) -> Dict:
+        """Main method to process a receipt image/PDF using OpenAI Vision API.
+
+        ``photo_paths`` (2+ images, in order) are treated as consecutive photos of ONE
+        long receipt: they are read together, stitched into a single image, and repeated
+        lines from overlapping/duplicated photos are merged.
+        """
         logger.info(f"Processing receipt: {image_path}")
-        
+
         if not self.openai_client:
             error_msg = "OpenAI client not initialized. Please provide a valid API key."
             logger.error(error_msg)
@@ -254,11 +287,18 @@ class ReceiptOCRGenAI:
         converted_image_path = None
         page_image_paths = []
         is_pdf = False
+        is_multi_photo = bool(photo_paths and len(photo_paths) > 1)
         page_count = 1
-        
+
         try:
             file_ext = os.path.splitext(image_path)[1].lower()
-            if file_ext == '.pdf':
+            if is_multi_photo:
+                page_image_paths = list(photo_paths)
+                page_count = len(page_image_paths)
+                stitched_path = os.path.splitext(page_image_paths[0])[0] + '_receipt.jpg'
+                converted_image_path = self.stitch_photos(page_image_paths, stitched_path)
+                logger.info(f"{page_count} photos stitched to: {converted_image_path}")
+            elif file_ext == '.pdf':
                 logger.info("PDF file detected, converting pages to image(s)...")
                 is_pdf = True
                 converted_image_path, page_image_paths, page_count = self.convert_pdf_to_images(image_path)
@@ -271,7 +311,11 @@ class ReceiptOCRGenAI:
             image_content_items = []
             
             # If multi-page PDF (<= 5 pages), send each page image individually for maximum OCR resolution
-            images_to_send = page_image_paths if (is_pdf and 1 < page_count <= 5) else [converted_image_path]
+            if is_multi_photo:
+                send_individually = page_count <= 8
+            else:
+                send_individually = is_pdf and 1 < page_count <= 5
+            images_to_send = page_image_paths if send_individually else [converted_image_path]
             
             for img_p in images_to_send:
                 base64_img = self.encode_image_to_base64(img_p)
@@ -318,6 +362,14 @@ Important extraction rules:
 6. Ensure amount (total) equals subtotal + tax_amount - discounts.
 7. Return valid JSON only."""
 
+            if is_multi_photo and send_individually:
+                prompt_instructions += f"""
+
+MULTI-PHOTO RECEIPT: the {len(images_to_send)} images are consecutive photos, in order, of ONE long receipt. Neighbouring photos often overlap, and the same photo may even be included twice.
+- For EVERY item, add a "photo" field with the 1-based number of the image you read it from.
+- List every item you can read in each image, even when its line also appears in the previous image. Do NOT merge or skip repeated lines yourself - the application removes overlaps.
+- Take merchant, address, date, subtotal, tax and total from the receipt's header/totals only; never add them up across photos."""
+
             messages = [
                 {
                     "role": "user",
@@ -346,7 +398,11 @@ Important extraction rules:
                 return self.create_fallback_result(image_path, f"JSON parsing failed: {str(e)}")
 
             # Process items list
-            items_list = parsed_data.get('items', [])
+            items_list = parsed_data.get('items', []) or []
+            photo_notes = []
+            if is_multi_photo:
+                items_list, photo_notes = merge_photo_items(items_list, page_count)
+                photo_notes += subtotal_note(items_list, parsed_data.get('subtotal'))
             if (
                 items_list
                 and len(items_list) == 1
@@ -386,10 +442,11 @@ Important extraction rules:
                 'subtotal': parsed_data.get('subtotal'),
                 'page_count': page_count,
                 'is_multipage': page_count > 1,
+                'photo_notes': photo_notes,
                 'success': True,
-                'method': f"gpt_vision_{'pdf_' if is_pdf else ''}{page_count}p",
+                'method': f"gpt_vision_{'pdf_' if is_pdf else 'photos_' if is_multi_photo else ''}{page_count}p",
                 'original_filename': os.path.basename(image_path) if is_pdf else None,
-                'converted_filename': os.path.basename(converted_image_path) if is_pdf else None
+                'converted_filename': os.path.basename(converted_image_path) if (is_pdf or is_multi_photo) else None
             }
 
             # Convert date string to date object
@@ -407,7 +464,7 @@ Important extraction rules:
                         result['date'] = datetime.now().date()
 
             # Clean up original PDF if converted
-            if is_pdf and converted_image_path:
+            if (is_pdf or is_multi_photo) and converted_image_path:
                 try:
                     if os.path.exists(image_path) and image_path != converted_image_path:
                         os.remove(image_path)
