@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Receipt Reader",
+  "short_name": "Receipts",
+  "description": "Scan receipts and keep your business expenses organized.",
+  "start_url": "/capture?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6fb",
+  "theme_color": "#0f172a",
+  "icons": [
+    {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ],
+  "shortcuts": [
+    {"name": "New receipt", "short_name": "Scan", "url": "/capture?source=shortcut", "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192"}]},
+    {"name": "Expenses", "url": "/expenses?source=shortcut", "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192"}]}
+  ]
+}

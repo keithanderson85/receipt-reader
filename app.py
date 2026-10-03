@@ -12,7 +12,7 @@ from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileRequired, FileAllowed
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_bcrypt import Bcrypt
-from wtforms import StringField, FloatField, DateField, SelectField, TextAreaField, SubmitField, PasswordField, HiddenField
+from wtforms import StringField, FloatField, DateField, SelectField, TextAreaField, SubmitField, PasswordField, HiddenField, BooleanField
 from wtforms.validators import DataRequired, NumberRange, Length, Optional
 from werkzeug.utils import secure_filename
 import pandas as pd
@@ -30,6 +30,11 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max total request size
+# Stay signed in on a phone (the installed app would otherwise ask for a login every launch)
+app.config['REMEMBER_COOKIE_DURATION'] = timedelta(days=90)
+app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['EBAY_DASHBOARD_URL'] = os.getenv('EBAY_DASHBOARD_URL', '')
 app.config['EBAY_DASHBOARD_API_KEY'] = os.getenv('EBAY_DASHBOARD_API_KEY', '')
 
@@ -136,6 +141,7 @@ class BulkReviewDecisionForm(FlaskForm):
 class LoginForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired(), Length(min=3, max=20)])
     password = PasswordField('Password', validators=[DataRequired()])
+    remember = BooleanField('Keep me signed in', default=True)
     submit = SubmitField('Login')
 
 class LocationForm(FlaskForm):
@@ -547,6 +553,28 @@ def check_for_duplicates(merchant_name, amount, date, file_hash=None, user_id=No
     conn.close()
     return duplicates
 
+@app.route('/manifest.webmanifest')
+def web_manifest():
+    """PWA manifest: lets the site be installed to the home screen and open straight on the scan screen."""
+    response = send_from_directory(app.static_folder, 'manifest.webmanifest', mimetype='application/manifest+json')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
+@app.route('/sw.js')
+def service_worker():
+    """Served from the site root so its scope covers every page."""
+    response = send_from_directory(app.static_folder, 'sw.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response
+
+
+@app.route('/offline')
+def offline_page():
+    return render_template('offline.html')
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -562,7 +590,7 @@ def login():
         
         if user_data and bcrypt.check_password_hash(user_data[2], form.password.data):
             user = User(user_data[0], user_data[1], user_data[2])
-            login_user(user)
+            login_user(user, remember=form.remember.data)
             flash('Logged in successfully!', 'success')
             next_page = request.args.get('next')
             return redirect(next_page) if next_page else redirect(url_for('index'))

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Offline - Receipt Reader{% endblock %}
+{% block bottom_nav %}{% endblock %}
+{% block content %}
+<div class="empty-state mt-5">
+    <i class="bi bi-wifi-off"></i>
+    <h5>You're offline</h5>
+    <p class="mb-3">Receipts need a connection to be read. Check your signal and try again.</p>
+    <button class="btn btn-primary" onclick="location.reload()"><i class="bi bi-arrow-clockwise me-1"></i> Try again</button>
+</div>
+{% endblock %}

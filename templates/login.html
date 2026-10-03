@@ -30,6 +30,11 @@
                             {% endfor %}
                         </div>
                         
+                        <div class="form-check mb-3">
+                            {{ form.remember(class="form-check-input") }}
+                            {{ form.remember.label(class="form-check-label") }}
+                        </div>
+
                         <div class="d-grid">
                             {{ form.submit(class="btn btn-primary") }}
                         </div>

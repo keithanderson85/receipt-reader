@@ -6,6 +6,16 @@
 {% set month_total = location_breakdown | sum(attribute=1) %}
 {% set month_count = location_breakdown | sum(attribute=2) %}
 
+<div id="installBanner" class="alert alert-info d-none align-items-center gap-2 py-2 mb-3" role="alert">
+    <i class="bi bi-phone fs-5"></i>
+    <div class="flex-grow-1 small">
+        <strong>Add this to your home screen</strong> for one-tap scanning.
+        <span id="installHint">In your browser menu choose <em>Add to Home screen</em>.</span>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm d-none" id="installBtn">Install</button>
+    <button type="button" class="btn-close" id="installDismiss" aria-label="Dismiss"></button>
+</div>
+
 <a href="{{ url_for('capture_page') }}" class="hero-cta mb-3">
     <span class="icon"><i class="bi bi-camera-fill"></i></span>
     <span>
@@ -127,6 +137,29 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    // install banner: phones only, not when already installed, not once dismissed
+    const banner = document.getElementById('installBanner');
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('installDismissed') === '1'; } catch (e) {}
+    if (banner && !standalone && !dismissed && window.matchMedia('(max-width: 767px)').matches) {
+        banner.classList.remove('d-none'); banner.classList.add('d-flex');
+        const btn = document.getElementById('installBtn');
+        const showInstall = function () {
+            btn.classList.remove('d-none');
+            document.getElementById('installHint').classList.add('d-none');
+        };
+        if (window.deferredInstall) showInstall(); else document.addEventListener('install-available', showInstall);
+        btn.addEventListener('click', function () {
+            window.deferredInstall.prompt();
+            window.deferredInstall.userChoice.finally(function () { banner.classList.add('d-none'); banner.classList.remove('d-flex'); });
+        });
+        document.getElementById('installDismiss').addEventListener('click', function () {
+            banner.classList.add('d-none'); banner.classList.remove('d-flex');
+            try { localStorage.setItem('installDismissed', '1'); } catch (e) {}
+        });
+    }
+
     const month = document.getElementById('locPaneMonth'), all = document.getElementById('locPaneAll');
     function sync() {
         const showAll = document.getElementById('locAll').checked;
