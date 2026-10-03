@@ -109,6 +109,37 @@ def test_light_background_with_enough_contrast(tmp_path):
     assert auto_crop_file(path).cropped
 
 
+def mottled_tile(w, h, seed=7):
+    """Light tan tile with darker veins and lighter patches: bright overall, but tinted."""
+    rng = np.random.default_rng(seed)
+    base = np.zeros((h, w, 3), np.float32)
+    base[:] = (125, 160, 190)                                    # BGR tan
+    blotch = cv2.GaussianBlur(rng.normal(0, 1, (h, w)).astype(np.float32), (0, 0), 25)
+    blotch = blotch / blotch.std() * 28
+    base += blotch[:, :, None]
+    speck = cv2.GaussianBlur(rng.normal(0, 1, (h, w)).astype(np.float32), (0, 0), 4)
+    base[speck > 1.6] = (110, 115, 120)                          # grey flecks
+    return np.clip(base + rng.normal(0, 6, (h, w, 3)), 0, 255).astype(np.uint8)
+
+
+def test_long_receipt_on_a_light_tinted_tile_touching_three_edges(tmp_path):
+    """Regression: a tall strip running off the top, bottom and right of the frame, on a light tan tile.
+    Brightness alone sees the whole frame as 'paper'; the paper colour has to be used."""
+    w, h = 1000, 2000
+    img = mottled_tile(w, h)
+    paper = receipt_texture(w, h)
+    mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(mask, np.array([[560, 0], [w, 0], [w, h], [575, h]], np.int32), 255)
+    img[mask > 0] = paper[mask > 0]
+    path = save(tmp_path, img)
+
+    res = auto_crop_file(path)
+    out_w, out_h = dims(path)
+    assert res.cropped, res
+    assert out_w < 0.55 * w and out_h > 0.9 * h                  # tile on the left trimmed, full length kept
+    assert out_w / out_h < 0.35
+
+
 # ---- cases that must be left alone ----------------------------------------------------
 
 def read_bytes(p):

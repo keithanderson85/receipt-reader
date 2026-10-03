@@ -54,11 +54,27 @@ def _quad_from_hull(hull):
     return cv2.boxPoints(cv2.minAreaRect(hull)).astype('float32')
 
 
-def _masks(gray):
-    """Candidate 'this is the receipt' masks: bright paper, and edge-enclosed regions."""
+def _paper_mask(small_bgr):
+    """Pixels that look like the paper: as bright and as colourless as the brightest part of the frame.
+
+    Beats plain brightness when the surface is light but tinted (tan tile, wood), because the paper is
+    neutral white while the table is not.
+    """
+    lab = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2LAB)
+    light = lab[:, :, 0]
+    reference = np.median(lab[light >= np.percentile(light, 97)], axis=0)
+    chroma = np.hypot(lab[:, :, 1].astype('float32') - reference[1], lab[:, :, 2].astype('float32') - reference[2])
+    mask = ((light > reference[0] - 45) & (chroma < 16)).astype('uint8') * 255
+    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+
+
+def _masks(small_bgr, gray):
+    """Candidate 'this is the receipt' masks, tightest-tracing first."""
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     side = max(gray.shape)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, side // 60),) * 2)
+
+    yield 'paper', cv2.morphologyEx(_paper_mask(small_bgr), cv2.MORPH_CLOSE, kernel, iterations=2)
 
     _, bright = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     yield 'bright', cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel, iterations=2)
@@ -95,7 +111,7 @@ def find_receipt_quad(bgr) -> Tuple[Optional['np.ndarray'], str, float]:
     frame_area = float(gray.shape[0] * gray.shape[1])
 
     best, best_ratio, saw_full_frame = None, 0.0, False
-    for name, mask in _masks(gray):                   # earlier masks trace the paper more tightly: first valid wins
+    for name, mask in _masks(small, gray):                   # earlier masks trace the paper more tightly: first valid wins
         best_score = 0.0
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:3]:
