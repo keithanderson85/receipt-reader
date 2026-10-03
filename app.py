@@ -1003,6 +1003,20 @@ def prune_staged_ocr(max_age_hours=24):
             pass
 
 
+def prune_originals(originals_dir, max_age_days=14):
+    """Untouched copies of cropped photos are kept briefly (to diagnose or undo a bad crop), then removed."""
+    if not os.path.isdir(originals_dir):
+        return
+    cutoff = datetime.now().timestamp() - max_age_days * 86400
+    for name in os.listdir(originals_dir):
+        path = os.path.join(originals_dir, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
+
+
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload_receipt():
@@ -1116,6 +1130,8 @@ def capture_process():
         return jsonify({'success': False, 'error': f'Up to {MAX_CAPTURE_PHOTOS} photos per receipt.'}), 400
 
     autocrop = request.form.get('autocrop', '1') != '0'
+    originals_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'originals')
+    prune_originals(originals_dir)
     batch = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     photo_paths, photo_hashes, notes, cleanup = [], [], [], []
 
@@ -1140,7 +1156,7 @@ def capture_process():
             photo_paths.append(path)
 
             # Crop after hashing so duplicate detection always compares the untouched upload
-            if autocrop and auto_crop_file(path).missed:
+            if autocrop and auto_crop_file(path, originals_dir=originals_dir).missed:
                 notes.append({'level': 'info',
                               'message': f"Couldn't find the receipt edges in photo {position} - used the full photo."})
 
@@ -1164,6 +1180,7 @@ def capture_process():
         leftovers = list(cleanup)
         if photo_paths:
             leftovers.append(os.path.splitext(photo_paths[0])[0] + '_receipt.jpg')  # stitched image
+        leftovers += [os.path.join(originals_dir, os.path.basename(p)) for p in cleanup]
         for path in leftovers:
             if os.path.exists(path):
                 try:

@@ -140,6 +140,92 @@ def test_long_receipt_on_a_light_tinted_tile_touching_three_edges(tmp_path):
     assert out_w / out_h < 0.35
 
 
+def paper_with_text(w, h, tint=(250, 250, 250)):
+    paper = np.zeros((h, w, 3), np.uint8)
+    paper[:] = tint
+    for i, y in enumerate(range(60, h - 40, 52)):
+        cv2.putText(paper, f'ITEM {i:03d} .......... {i * 1.37:6.2f}', (30, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (20, 20, 20), 2)
+    return paper
+
+
+def test_long_receipt_whose_far_end_is_shaded_is_cropped_to_full_length(tmp_path):
+    """Regression: shading darkens the lower part of a long receipt so it looks like a different colour.
+    Only the lit top used to be detected (or the crop was skipped)."""
+    w, h = 1000, 2000
+    img = mottled_tile(w, h)
+    paper = paper_with_text(w, h)
+    shade = np.linspace(1.0, 0.72, h)[None, :, None, None].reshape(h, 1, 1)            # darker towards the bottom
+    paper = np.clip(paper.astype(np.float32) * shade, 0, 255).astype(np.uint8)
+    mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(mask, np.array([[300, 120], [700, 118], [706, h], [296, h]], np.int32), 255)
+    img[mask > 0] = paper[mask > 0]
+    path = save(tmp_path, img)
+
+    res = auto_crop_file(path)
+    out_w, out_h = dims(path)
+    assert res.cropped, res
+    assert out_h > 0.9 * (h - 120) and out_w < 0.55 * w          # full length kept, tile trimmed at the sides
+
+
+def test_extension_does_not_run_past_the_end_of_a_receipt(tmp_path):
+    """Regression: a receipt that ends inside the frame must not be stretched down over the table below it."""
+    w, h = 1000, 1800
+    img = np.clip(np.random.default_rng(3).normal(55, 6, (h, w, 3)), 0, 255).astype(np.uint8)    # dark fabric
+    paper = paper_with_text(420, 1100)
+    img[200:1300, 290:710] = paper
+    path = save(tmp_path, img)
+
+    res = auto_crop_file(path)
+    out_w, out_h = dims(path)
+    assert res.cropped and out_h < 1250 and out_w < 520          # ends where the paper ends, not at the frame
+
+
+def test_receipt_filling_the_frame_is_not_cut_in_half(tmp_path):
+    """Regression: a line cut through printed text has plenty of contrast, but it is not a paper edge."""
+    w, h = 940, 2750
+    img = mottled_tile(w, h)
+    img[:, 18:922] = paper_with_text(904, h)                     # paper nearly fills the width, runs off top and bottom
+    shade = np.linspace(1.0, 0.8, h).reshape(h, 1, 1)
+    img = np.clip(img.astype(np.float32) * shade, 0, 255).astype(np.uint8)
+    path = save(tmp_path, img)
+
+    res = auto_crop_file(path)
+    out_w, out_h = dims(path)
+    assert (not res.cropped) or out_h >= 0.95 * h               # never loses the bottom of the receipt
+
+
+def test_glare_in_a_corner_does_not_hide_the_receipt(tmp_path):
+    """Regression: the brightest pixels were bright tile in the corner, so the paper colour was learned wrongly."""
+    w, h = 1200, 1200
+    img = mottled_tile(w, h).astype(np.float32)
+    yy, xx = np.mgrid[0:h, 0:w]
+    glare = np.clip(1 - np.hypot(xx, yy) / 500, 0, 1)[:, :, None] * 95                # sunlit corner, brighter than paper
+    img = np.clip(img + glare, 0, 255).astype(np.uint8)
+    paper = paper_with_text(420, 1000, tint=(235, 222, 205))                         # cool white (BGR)
+    img[100:1100, 560:980] = paper
+    path = save(tmp_path, img)
+
+    res = auto_crop_file(path)
+    out_w, out_h = dims(path)
+    assert res.cropped and out_w < 600 and out_h > 900
+
+
+def test_original_is_kept_when_cropping(tmp_path):
+    path = save(tmp_path, photo([[500, 100], [1100, 100], [1100, 1100], [500, 1100]]))
+    before = read_bytes(path)
+    keep = tmp_path / 'originals'
+    assert auto_crop_file(path, originals_dir=str(keep)).cropped
+    assert (keep / 'p.jpg').read_bytes() == before               # untouched copy
+    assert read_bytes(path) != before                            # file itself is the cropped version
+
+
+def test_no_original_is_saved_when_nothing_was_cropped(tmp_path):
+    path = save(tmp_path, np.full((H, W, 3), 90, np.uint8))
+    keep = tmp_path / 'originals'
+    assert not auto_crop_file(path, originals_dir=str(keep)).cropped
+    assert not keep.exists()
+
+
 # ---- cases that must be left alone ----------------------------------------------------
 
 def read_bytes(p):
@@ -241,7 +327,7 @@ def test_duplicate_detection_uses_the_untouched_upload(A, client, ocr, table_pho
 
 def test_user_is_told_when_the_receipt_edges_were_not_found(A, client, ocr, table_photo, monkeypatch):
     import app as app_module
-    monkeypatch.setattr(app_module, 'auto_crop_file', lambda path: CropResult(False, 'not_found'))
+    monkeypatch.setattr(app_module, 'auto_crop_file', lambda path, **kw: CropResult(False, 'not_found'))
     res = post(client, [('a.jpg', table_photo)])
     html = client.get(res.get_json()['redirect_url']).get_data(as_text=True)
     assert "find the receipt edges in photo 1" in html
@@ -250,7 +336,7 @@ def test_user_is_told_when_the_receipt_edges_were_not_found(A, client, ocr, tabl
 def test_a_cropping_crash_never_blocks_the_upload(A, client, ocr, table_photo, monkeypatch):
     import app as app_module
 
-    def boom(path):
+    def boom(path, **kw):
         raise RuntimeError('cv exploded')
     monkeypatch.setattr(app_module, 'auto_crop_file', boom)
     # auto_crop_file guards itself; if a bug ever slips through, the route must report it, not hang

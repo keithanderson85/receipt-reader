@@ -19,7 +19,8 @@ def review_name(resp):
 
 
 def uploads(A):
-    return sorted(os.listdir(A.app.config['UPLOAD_FOLDER']))
+    folder = A.app.config['UPLOAD_FOLDER']
+    return sorted(n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n)))
 
 
 def drafts(A):
