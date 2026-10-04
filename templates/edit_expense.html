@@ -98,6 +98,7 @@
             {{ form.hidden_tag() }}
             {{ form.raw_json() }}
             <input type="hidden" name="filename" value="{{ filename }}">
+            {% if ocr_result.get('scan_id') %}<input type="hidden" name="scan_id" value="{{ ocr_result.scan_id }}">{% endif %}
             {% if ocr_result.file_hash %}<input type="hidden" name="file_hash" value="{{ ocr_result.file_hash }}">{% endif %}
             {% if ocr_result.get('processed_filename') %}<input type="hidden" name="processed_filename" value="{{ ocr_result.processed_filename }}">{% endif %}
 

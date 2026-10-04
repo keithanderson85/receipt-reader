@@ -70,3 +70,5 @@ test_results/
 # Backup credentials (contain OAuth tokens — never commit)
 scripts/gdrive_credentials.json
 scripts/gdrive_token.json
+# Frontend test tooling
+node_modules/

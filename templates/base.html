@@ -30,6 +30,7 @@
             <nav class="top-links" aria-label="Main">
                 <a class="top-link {% if ep == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-house"></i> Dashboard</a>
                 <a class="top-link {% if ep == 'capture_page' %}active{% endif %}" href="{{ url_for('capture_page') }}"><i class="bi bi-camera"></i> New Receipt</a>
+                <a class="top-link {% if ep in ('inbox', 'inbox_review') %}active{% endif %}" href="{{ url_for('inbox') }}"><i class="bi bi-inbox"></i> Inbox{% if inbox_count %} <span class="badge rounded-pill text-bg-warning">{{ inbox_count }}</span>{% endif %}</a>
                 <a class="top-link {% if ep in ('view_expenses', 'edit_expense', 'view_expense_items') %}active{% endif %}" href="{{ url_for('view_expenses') }}"><i class="bi bi-list-check"></i> Expenses</a>
                 <a class="top-link {% if ep == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt"></i> Locations</a>
                 <a class="top-link {% if ep in ('bulk_upload_page', 'bulk_upload_receipts', 'bulk_upload_resume') %}active{% endif %}" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files"></i> Bulk Upload</a>
@@ -76,10 +77,14 @@
         <a class="tab {% if ep == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-house{{ '-fill' if ep == 'index' }}"></i>Home</a>
         <a class="tab {% if ep in ('view_expenses', 'edit_expense', 'view_expense_items') %}active{% endif %}" href="{{ url_for('view_expenses') }}"><i class="bi bi-list-ul"></i>Expenses</a>
         <a class="tab tab-fab" href="{{ url_for('capture_page') }}" aria-label="New receipt"><span><i class="bi bi-camera-fill"></i></span><small>Scan</small></a>
-        <a class="tab {% if ep == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt{{ '-fill' if ep == 'locations_page' }}"></i>Stores</a>
+        <a class="tab position-relative {% if ep in ('inbox', 'inbox_review') %}active{% endif %}" href="{{ url_for('inbox') }}">
+            <i class="bi bi-inbox{{ '-fill' if ep in ('inbox', 'inbox_review') }}"></i>Inbox
+            {% if inbox_count %}<span class="tab-badge">{{ inbox_count }}</span>{% endif %}
+        </a>
         <div class="dropup">
             <button class="tab w-100" type="button" data-bs-toggle="dropdown" aria-label="More"><i class="bi bi-three-dots"></i>More</button>
             <ul class="dropdown-menu dropdown-menu-end">
+                <li><a class="dropdown-item" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt me-2"></i>Stores</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files me-2"></i>Bulk upload</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('issue_dashboard') }}"><i class="bi bi-exclamation-diamond me-2"></i>Issues</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='excel') }}"><i class="bi bi-file-earmark-excel me-2"></i>Export Excel</a></li>

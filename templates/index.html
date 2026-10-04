@@ -25,6 +25,19 @@
     <i class="bi bi-chevron-right chev"></i>
 </a>
 
+{% if inbox_count %}
+<a href="{{ url_for('inbox') }}" class="card mb-3 text-decoration-none border-warning-subtle" style="background: var(--warning-bg);">
+    <div class="card-body py-3 d-flex align-items-center gap-3">
+        <i class="bi bi-inbox fs-3 text-warning"></i>
+        <div class="flex-grow-1">
+            <div class="fw-semibold text-body">{{ inbox_count }} receipt{{ '' if inbox_count == 1 else 's' }} waiting in your inbox</div>
+            <div class="small text-secondary">Approve the clean ones in a tap.</div>
+        </div>
+        <i class="bi bi-chevron-right text-secondary"></i>
+    </div>
+</a>
+{% endif %}
+
 <div class="stat-row mb-4">
     <div class="stat-tile wide">
         <div class="label">This month</div>

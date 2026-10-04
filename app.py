@@ -18,6 +18,8 @@ from werkzeug.utils import secure_filename
 import pandas as pd
 from receipt_ocr_genai import ReceiptOCRGenAI
 from receipt_crop import auto_crop_file
+from receipt_items import subtotal_note
+import scan_store
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 import json
@@ -96,6 +98,17 @@ CATEGORY_SHORT = {
     'equipment': 'Equipment', 'advertising': 'Advertising', 'professional_services': 'Services',
     'utilities': 'Utilities', 'rent': 'Rent', 'insurance': 'Insurance', 'other': 'Other',
 }
+
+
+@app.context_processor
+def inject_inbox_count():
+    """Number of scanned receipts waiting in the inbox (shown on the nav)."""
+    if not current_user.is_authenticated:
+        return {'inbox_count': 0}
+    try:
+        return {'inbox_count': scan_store.count_open(current_user.id)}
+    except sqlite3.Error:
+        return {'inbox_count': 0}
 
 
 @app.context_processor
@@ -383,6 +396,7 @@ def init_db():
     except sqlite3.OperationalError:
         pass  # Column already exists
     
+    scan_store.init_table(conn)
     conn.commit()
     conn.close()
 
@@ -1144,30 +1158,53 @@ def capture_page():
     return render_template('capture.html', form=FlaskForm(), max_photos=MAX_CAPTURE_PHOTOS)
 
 
-@app.route('/capture/process', methods=['POST'])
-@login_required
-def capture_process():
-    """Read 1..N ordered photos as a single receipt and return the review URL."""
-    if not FlaskForm().validate_on_submit():
-        return jsonify({'success': False, 'error': 'Session expired - reload the page and try again.'}), 400
+class CaptureInputError(Exception):
+    """The uploaded photos can't be used (message is safe to show the user)."""
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
 
+
+def _capture_uploads():
+    """Validate the multipart request and return (uploads, autocrop)."""
+    if not FlaskForm().validate_on_submit():
+        raise CaptureInputError('Session expired - reload the page and try again.')
     uploads = [f for f in request.files.getlist('photos') if f and f.filename]
     if not uploads:
-        return jsonify({'success': False, 'error': 'Add at least one photo.'}), 400
+        raise CaptureInputError('Add at least one photo.')
     if len(uploads) > MAX_CAPTURE_PHOTOS:
-        return jsonify({'success': False, 'error': f'Up to {MAX_CAPTURE_PHOTOS} photos per receipt.'}), 400
+        raise CaptureInputError(f'Up to {MAX_CAPTURE_PHOTOS} photos per receipt.')
+    return uploads, request.form.get('autocrop', '1') != '0'
 
-    autocrop = request.form.get('autocrop', '1') != '0'
+
+def _remove_capture_files(cleanup, photo_paths):
+    originals_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'originals')
+    leftovers = list(cleanup)
+    if photo_paths:
+        leftovers.append(os.path.splitext(photo_paths[0])[0] + '_receipt.jpg')       # stitched image
+    leftovers += [os.path.join(originals_dir, os.path.basename(p)) for p in cleanup]
+    for path in leftovers:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _ingest_capture_photos(uploads, autocrop):
+    """Save, de-duplicate and crop the uploaded photos.
+
+    Returns (photo_paths, photo_hashes, notes, cleanup). On any failure the files saved so far are removed.
+    """
     originals_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'originals')
     prune_originals(originals_dir)
     batch = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     photo_paths, photo_hashes, notes, cleanup = [], [], [], []
-
     try:
         for position, upload in enumerate(uploads, 1):
             ext = os.path.splitext(secure_filename(upload.filename))[1].lower()
             if ext not in ('.jpg', '.jpeg', '.png'):
-                return jsonify({'success': False, 'error': f'Photo {position}: only JPG or PNG images are supported.'}), 400
+                raise CaptureInputError(f'Photo {position}: only JPG or PNG images are supported.')
 
             path = os.path.join(app.config['UPLOAD_FOLDER'], f'{batch}_{position}{ext}')
             upload.save(path)
@@ -1187,13 +1224,35 @@ def capture_process():
             if autocrop and auto_crop_file(path, originals_dir=originals_dir).missed:
                 notes.append({'level': 'info',
                               'message': f"Couldn't find the receipt edges in photo {position} - used the full photo."})
+    except Exception:
+        _remove_capture_files(cleanup, photo_paths)
+        raise
+    return photo_paths, photo_hashes, notes, cleanup
 
+
+def _combined_hash(photo_hashes):
+    return photo_hashes[0] if len(photo_hashes) == 1 else hashlib.sha256('|'.join(photo_hashes).encode()).hexdigest()
+
+
+@app.route('/capture/process', methods=['POST'])
+@login_required
+def capture_process():
+    """Read 1..N ordered photos as a single receipt right now and return the review URL."""
+    try:
+        uploads, autocrop = _capture_uploads()
+        photo_paths, photo_hashes, notes, cleanup = _ingest_capture_photos(uploads, autocrop)
+    except CaptureInputError as e:
+        return jsonify({'success': False, 'error': str(e)}), e.status
+    except Exception as e:
+        app.logger.exception('Saving capture photos failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    try:
         if len(photo_paths) == 1:
             ocr_result = receipt_ocr.process_receipt(photo_paths[0])
-            file_hash = photo_hashes[0]
         else:
             ocr_result = receipt_ocr.process_receipt(photo_paths[0], photo_paths=photo_paths)
-            file_hash = hashlib.sha256('|'.join(photo_hashes).encode()).hexdigest()
+        file_hash = _combined_hash(photo_hashes)
 
         if not ocr_result.get('success', False):
             raise RuntimeError(ocr_result.get('error', 'OCR processing failed'))
@@ -1205,17 +1264,341 @@ def capture_process():
 
     except Exception as e:
         app.logger.exception('Capture processing failed')
-        leftovers = list(cleanup)
-        if photo_paths:
-            leftovers.append(os.path.splitext(photo_paths[0])[0] + '_receipt.jpg')  # stitched image
-        leftovers += [os.path.join(originals_dir, os.path.basename(p)) for p in cleanup]
-        for path in leftovers:
+        _remove_capture_files(cleanup, photo_paths)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ---- snap and go: save now, read in the background, approve later from the inbox -----------------------------
+
+SCAN_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='scan-reader')
+SAME_AMOUNT_DATE = ('same_file', 'same_amount_date')          # reasons that mean "this is a duplicate"
+
+
+def _norm_amount(value):
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _scan_summary(scan):
+    """What the inbox/status endpoints show for a scan (merchant, amount, date from the best read so far)."""
+    result = scan.get('result') or {}
+    return {
+        'merchant': result.get('merchant_name') or scan.get('quick_merchant'),
+        'amount': result.get('amount') if result.get('amount') is not None else scan.get('quick_amount'),
+        'date': result.get('date') or scan.get('quick_date'),
+    }
+
+
+def _duplicate_check_for_scan(user_id, merchant, amount, date, file_hash, scan_id):
+    """Check a scan against saved expenses AND other receipts still waiting in the inbox.
+
+    Returns {'status': 'new' | 'maybe' | 'duplicate', 'matches': [...]}. The same amount on the same date is
+    the main signal; 'maybe' means that match was at a differently named store.
+    """
+    matches = []
+    amount, date = _norm_amount(amount), (str(date)[:10] if date else None)
+    saved = check_for_duplicates(merchant or '', amount, date, file_hash, user_id=user_id)
+    for reason, rows in (('same_file', saved['exact_file']), ('same_amount_date', saved['exact_match']),
+                         ('same_amount_date_other_store', saved['similar'])):
+        for row in rows:
+            matches.append({'kind': 'expense', 'reason': reason, 'id': row[0], 'merchant': row[1],
+                            'amount': row[2], 'date': row[3]})
+
+    for other in scan_store.other_open_scans(user_id, scan_id):
+        info = _scan_summary(other)
+        if file_hash and other.get('file_hash') == file_hash:
+            reason = 'same_file'
+        elif amount is not None and date and _norm_amount(info['amount']) == amount and str(info['date'] or '')[:10] == date:
+            reason = 'same_amount_date'
+        else:
+            continue
+        matches.append({'kind': 'scan', 'reason': reason, 'id': other['id'], 'merchant': info['merchant'],
+                        'amount': info['amount'], 'date': info['date']})
+
+    if any(m['reason'] in SAME_AMOUNT_DATE for m in matches):
+        status = 'duplicate'
+    elif matches:
+        status = 'maybe'
+    else:
+        status = 'new'
+    return {'status': status, 'matches': matches}
+
+
+def _build_scan_entry(ocr_result, user_id, file_hash, filename):
+    """Clean an OCR result into the dict that is stored, approved, or shown on the review screen."""
+    merchant = clean_merchant_name((ocr_result.get('merchant_name') or '').strip())
+    location = correct_location_by_zip(ocr_result.get('address', ''), ocr_result.get('location', ''))
+    match = find_matching_location(ocr_result.get('address'), user_id=user_id)
+    category, location_match = None, None
+    if match:
+        merchant, category = match[1], (match[2] or None)
+        location_match = {'id': match[0], 'name': match[1], 'category': match[2]}
+    category = category or infer_category_from_merchant(merchant)
+
+    date_val = ocr_result.get('date')
+    if hasattr(date_val, 'isoformat'):
+        date_val = date_val.isoformat()
+    entry = {k: ocr_result.get(k) for k in ('address', 'subtotal', 'tax_amount', 'tax_rate', 'discount_amount',
+                                            'raw_text', 'method', 'page_count', 'is_multipage')}
+    entry.update({
+        'merchant_name': merchant, 'location': location, 'location_match': location_match, 'category': category,
+        'amount': _norm_amount(ocr_result.get('amount')), 'date': str(date_val)[:10] if date_val else None,
+        'items': serialize_items(ocr_result.get('items')), 'photo_notes': list(ocr_result.get('photo_notes') or []),
+        'file_hash': file_hash, 'receipt_filename': filename,
+    })
+    return entry
+
+
+def _review_reasons(entry, dup):
+    """Why a read receipt needs a human look before it can be approved in one tap."""
+    reasons = []
+    if not entry.get('merchant_name'):
+        reasons.append('Store name missing')
+    if entry.get('amount') is None or entry['amount'] <= 0:
+        reasons.append('Total missing or unreadable')
+    if not entry.get('date'):
+        reasons.append('Date missing')
+    if dup['status'] == 'duplicate':
+        reasons.append('Looks like a duplicate')
+    elif dup['status'] == 'maybe':
+        reasons.append('Same total and date as another receipt')
+    return reasons
+
+
+def _scan_paths(scan):
+    folder = app.config['UPLOAD_FOLDER']
+    return [os.path.join(folder, name) for name in (scan.get('photo_paths') or [])]
+
+
+def _run_scan(scan_id):
+    """Background reader: a quick merchant/total/date read (for the instant duplicate check), then the full read."""
+    scan = scan_store.get_scan(scan_id)
+    if not scan or scan['status'] != 'processing':
+        return
+    user_id = scan['user_id']
+    try:
+        photos = [p for p in _scan_paths(scan) if os.path.exists(p)]
+        if not photos:
+            raise RuntimeError('The uploaded photos are no longer on the server.')
+
+        quick = receipt_ocr.quick_read([photos[0], photos[-1]] if len(photos) > 1 else photos)
+        if quick and (quick['amount'] is not None or quick['date']):
+            dup = _duplicate_check_for_scan(user_id, quick['merchant_name'], quick['amount'], quick['date'],
+                                            scan['file_hash'], scan_id)
+            scan_store.update_scan(scan_id, quick_merchant=quick['merchant_name'], quick_amount=quick['amount'],
+                                   quick_date=quick['date'], quick_status='done',
+                                   dup_status=dup['status'], dup_info=dup)
+        else:
+            scan_store.update_scan(scan_id, quick_status='failed')
+
+        ocr_result = receipt_ocr.process_receipt(photos[0], photo_paths=photos if len(photos) > 1 else None)
+        if not ocr_result.get('success', False):
+            raise RuntimeError(ocr_result.get('error', 'Could not read this receipt'))
+
+        filename = ocr_result.get('processed_filename') or ocr_result.get('converted_filename') or os.path.basename(photos[0])
+        ocr_result['photo_notes'] = list(scan.get('notes') or []) + list(ocr_result.get('photo_notes') or [])
+        entry = _build_scan_entry(ocr_result, user_id, scan['file_hash'], filename)
+        for note in subtotal_note(entry['items'], entry.get('subtotal')):
+            if note not in entry['photo_notes']:
+                entry['photo_notes'].append(note)
+
+        dup = _duplicate_check_for_scan(user_id, entry['merchant_name'], entry['amount'], entry['date'],
+                                        scan['file_hash'], scan_id)
+        reasons = _review_reasons(entry, dup)
+        scan_store.update_scan(scan_id, status='needs_review' if reasons else 'ready', filename=filename, result=entry,
+                               dup_status=dup['status'], dup_info=dup, notes=reasons, error=None)
+    except Exception as exc:
+        app.logger.exception('Scan %s failed', scan_id)
+        scan_store.update_scan(scan_id, status='error', error=str(exc)[:300])
+
+
+def _queue_scan(scan_id):
+    if app.config.get('SCANS_SYNC'):                  # tests (and debugging) run the reader inline
+        _run_scan(scan_id)
+    else:
+        SCAN_EXECUTOR.submit(_run_scan, scan_id)
+
+
+@app.route('/capture/submit', methods=['POST'])
+@login_required
+def capture_submit():
+    """Snap and go: save the photos, start reading in the background, and return straight away."""
+    try:
+        uploads, autocrop = _capture_uploads()
+        photo_paths, photo_hashes, notes, _ = _ingest_capture_photos(uploads, autocrop)
+    except CaptureInputError as e:
+        return jsonify({'success': False, 'error': str(e)}), e.status
+    except Exception as e:
+        app.logger.exception('Saving capture photos failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    scan_id = scan_store.create_scan(current_user.id, os.path.basename(photo_paths[0]), _combined_hash(photo_hashes),
+                                     photo_count=len(photo_paths), photo_paths=[os.path.basename(p) for p in photo_paths],
+                                     notes=notes)
+    _queue_scan(scan_id)
+    return jsonify({'success': True, 'scan_id': scan_id, 'status_url': url_for('scan_status', scan_id=scan_id)})
+
+
+@app.route('/scans/<scan_id>/status')
+@login_required
+def scan_status(scan_id):
+    scan = scan_store.get_scan(scan_id, current_user.id)
+    if not scan:
+        return jsonify({'success': False, 'error': 'Not found'}), 404
+    dup = scan.get('dup_info') or {'status': scan.get('dup_status') or 'unknown', 'matches': []}
+    return jsonify({
+        'success': True, 'status': scan['status'], 'quick_status': scan['quick_status'],
+        'dup_status': scan['dup_status'], 'matches': dup.get('matches', []), 'error': scan.get('error'),
+        'reasons': scan.get('notes') if scan['status'] in ('needs_review', 'ready') else [],
+        **_scan_summary(scan),
+        'review_url': url_for('inbox_review', scan_id=scan_id) if scan['status'] in ('ready', 'needs_review') else None,
+    })
+
+
+def _insert_expense_from_entry(conn, user_id, entry, filename, file_hash):
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO expenses (user_id, merchant_name, location, address, amount, date, category, description,
+                              receipt_filename, file_hash, subtotal, tax_amount, discount_amount, tax_rate, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, entry['merchant_name'], entry.get('location'), entry.get('address'), entry['amount'], entry['date'],
+          entry.get('category') or 'other', entry.get('description'), filename, file_hash, entry.get('subtotal'),
+          entry.get('tax_amount'), entry.get('discount_amount') or 0, entry.get('tax_rate'), entry.get('raw_text')))
+    expense_id = cursor.lastrowid
+    for item in entry.get('items') or []:
+        if item.get('description') and item.get('price') is not None:
+            cursor.execute('INSERT INTO receipt_items (expense_id, sku, description, price, quantity, raw_line) '
+                           'VALUES (?, ?, ?, ?, ?, ?)',
+                           (expense_id, item.get('sku'), item['description'], item['price'],
+                            item.get('quantity') or 1, item.get('raw_line')))
+    return expense_id
+
+
+def _approve_scan(scan, force=False):
+    """Save a read receipt as an expense. Returns (ok, message). Re-checks duplicates first."""
+    entry = scan.get('result')
+    if scan['status'] not in ('ready', 'needs_review') or not entry:
+        return False, 'This receipt is not ready yet.'
+    if not (entry.get('merchant_name') and entry.get('amount') is not None and entry.get('date')):
+        return False, 'Fill in the missing details first (use Review).'
+    dup = _duplicate_check_for_scan(scan['user_id'], entry['merchant_name'], entry['amount'], entry['date'],
+                                    scan['file_hash'], scan['id'])
+    if dup['status'] == 'duplicate' and not force:
+        scan_store.update_scan(scan['id'], status='needs_review', dup_status=dup['status'], dup_info=dup,
+                               notes=_review_reasons(entry, dup))
+        return False, 'Looks like a duplicate - review it or save anyway.'
+
+    conn = sqlite3.connect('receipts.db', timeout=30)
+    try:
+        expense_id = _insert_expense_from_entry(conn, scan['user_id'], entry, scan['filename'], scan['file_hash'])
+        conn.commit()
+    finally:
+        conn.close()
+    scan_store.update_scan(scan['id'], status='saved', expense_id=expense_id)
+    return True, 'Saved.'
+
+
+def _discard_scan(scan):
+    folder = app.config['UPLOAD_FOLDER']
+    names = set(scan.get('photo_paths') or []) | ({scan['filename']} if scan.get('filename') else set())
+    for name in names:
+        for path in (os.path.join(folder, name), os.path.join(folder, 'originals', name)):
             if os.path.exists(path):
                 try:
                     os.remove(path)
                 except OSError:
                     pass
-        return jsonify({'success': False, 'error': str(e)}), 500
+    scan_store.update_scan(scan['id'], status='discarded')
+
+
+@app.route('/inbox')
+@login_required
+def inbox():
+    scan_store.fail_stale()
+    scans = scan_store.list_scans(current_user.id)
+    for scan in scans:
+        scan['summary'] = _scan_summary(scan)
+    clean = [s for s in scans if s['status'] == 'ready' and s['dup_status'] == 'new']
+    return render_template('inbox.html', scans=scans, clean_count=len(clean), form=FlaskForm())
+
+
+def _inbox_post(scan_id=None):
+    """Common checks for inbox actions: CSRF-valid form and (when given) a scan owned by this user."""
+    if not FlaskForm().validate_on_submit():
+        flash('Session expired - please try again.', 'error')
+        return None, False
+    scan = scan_store.get_scan(scan_id, current_user.id) if scan_id else None
+    if scan_id and not scan:
+        flash('That receipt was not found.', 'error')
+        return None, False
+    return scan, True
+
+
+@app.route('/inbox/<scan_id>/approve', methods=['POST'])
+@login_required
+def inbox_approve(scan_id):
+    scan, ok = _inbox_post(scan_id)
+    if ok:
+        done, message = _approve_scan(scan, force=request.form.get('force') == '1')
+        flash(message if not done else f"Saved {scan['result']['merchant_name']} ${scan['result']['amount']:.2f}.",
+              'success' if done else 'warning')
+    return redirect(url_for('inbox'))
+
+
+@app.route('/inbox/approve_ready', methods=['POST'])
+@login_required
+def inbox_approve_ready():
+    _, ok = _inbox_post()
+    if not ok:
+        return redirect(url_for('inbox'))
+    saved = held = 0
+    for scan in scan_store.list_scans(current_user.id, ('ready',)):
+        if scan['dup_status'] != 'new':
+            continue
+        done, _ = _approve_scan(scan)
+        saved, held = saved + int(done), held + int(not done)
+    flash(f'Saved {saved} receipt{"" if saved == 1 else "s"}.' + (f' {held} held back - check them.' if held else ''),
+          'success' if not held else 'warning')
+    return redirect(url_for('inbox'))
+
+
+@app.route('/inbox/<scan_id>/discard', methods=['POST'])
+@login_required
+def inbox_discard(scan_id):
+    scan, ok = _inbox_post(scan_id)
+    if ok:
+        _discard_scan(scan)
+        flash('Receipt discarded.', 'success')
+    return redirect(url_for('inbox'))
+
+
+@app.route('/inbox/<scan_id>/retry', methods=['POST'])
+@login_required
+def inbox_retry(scan_id):
+    scan, ok = _inbox_post(scan_id)
+    if ok:
+        if scan['status'] != 'error' or not any(os.path.exists(p) for p in _scan_paths(scan)):
+            flash('This receipt can\'t be retried - discard it and scan again.', 'warning')
+        else:
+            scan_store.update_scan(scan_id, status='processing', error=None, quick_status='pending')
+            _queue_scan(scan_id)
+            flash('Reading it again.', 'success')
+    return redirect(url_for('inbox'))
+
+
+@app.route('/inbox/<scan_id>/review')
+@login_required
+def inbox_review(scan_id):
+    """Open the full review screen for a scan (edit anything, then save)."""
+    scan = scan_store.get_scan(scan_id, current_user.id)
+    if not scan or not scan.get('result'):
+        flash('That receipt is not ready for review yet.', 'warning')
+        return redirect(url_for('inbox'))
+    entry = dict(scan['result'])
+    entry['scan_id'] = scan_id
+    return redirect(stage_ocr_for_review(entry, scan['filename'], scan['file_hash']))
 
 
 @app.route('/review/<filename>')
@@ -1342,6 +1725,9 @@ def save_expense():
         conn.commit()
         conn.close()
         discard_staged_ocr(filename)
+        scan_id = request.form.get('scan_id')
+        if scan_id and scan_store.get_scan(scan_id, current_user.id):
+            scan_store.update_scan(scan_id, status='saved', expense_id=expense_id)
         
         flash('Expense saved successfully!', 'success')
         return redirect(url_for('index'))
@@ -2729,6 +3115,7 @@ def delete_uploaded_file():
         
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         discard_staged_ocr(filename)
+        scan_store.discard_by_filename(current_user.id, filename)
         
         # Check if file exists and delete it
         if os.path.exists(filepath):

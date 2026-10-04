@@ -270,6 +270,59 @@ class ReceiptOCRGenAI:
             'note': 'Please try again later'
         }
 
+    QUICK_PROMPT = """Read ONLY these three things from this receipt and answer in exact JSON:
+
+{"merchant_name": "store name", "amount": 15.99, "date": "YYYY-MM-DD"}
+
+- amount is the final grand total actually charged (after tax and discounts), as a number.
+- date is the transaction date.
+- If there are several images they are the top and the bottom of ONE receipt: combine them.
+- Use null for anything you cannot read. JSON only."""
+
+    @staticmethod
+    def parse_receipt_date(value) -> Optional[str]:
+        """Best-effort date -> 'YYYY-MM-DD' (None when unreadable)."""
+        if not value:
+            return None
+        text = str(value).split('T')[0].strip()
+        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%m/%d/%y'):
+            try:
+                return datetime.strptime(text, fmt).date().isoformat()
+            except ValueError:
+                continue
+        return None
+
+    def quick_read(self, image_paths: List[str]) -> Optional[Dict]:
+        """Fast, cheap first pass: just merchant, grand total and date (a few seconds, tiny output).
+
+        Used for the instant duplicate check while the full read (items, tax, ...) carries on in the background.
+        Returns None when it can't be read; never raises.
+        """
+        if not self.openai_client or not image_paths:
+            return None
+        try:
+            content = [{"type": "text", "text": self.QUICK_PROMPT}]
+            for path in image_paths:
+                ext = os.path.splitext(path)[1].lower()
+                mime = "image/png" if ext == '.png' else "image/jpeg"
+                content.append({"type": "image_url", "image_url": {
+                    "url": f"data:{mime};base64,{self.encode_image_to_base64(path)}", "detail": "high"}})
+            raw = self.call_openai_with_retry([{"role": "user", "content": content}],
+                                              model=self.default_model, max_retries=2, max_tokens=120)
+            data = json.loads((raw or '').strip())
+            try:
+                amount = round(float(data.get('amount')), 2)
+            except (TypeError, ValueError):
+                amount = None
+            return {
+                'merchant_name': (data.get('merchant_name') or '').strip() or None,
+                'amount': amount,
+                'date': self.parse_receipt_date(data.get('date')),
+            }
+        except Exception as exc:
+            logger.warning("Quick read failed: %s", exc)
+            return None
+
     def process_receipt(self, image_path: str, photo_paths: Optional[List[str]] = None) -> Dict:
         """Main method to process a receipt image/PDF using OpenAI Vision API.
 

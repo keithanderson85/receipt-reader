@@ -36,7 +36,7 @@ def test_capture_requires_login(anon):
 
 def test_capture_page_renders(client):
     html = client.get('/capture').get_data(as_text=True)
-    assert 'Take photo' in html and 'From gallery' in html and 'Read receipt' in html
+    assert 'Take photo' in html and 'From gallery' in html and 'Save receipt' in html
 
 
 # ---- processing ----------------------------------------------------------------

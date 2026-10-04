@@ -1,0 +1,6 @@
+{
+  "name": "receipt-reader-frontend-tests",
+  "private": true,
+  "description": "Browser-behaviour tests for the capture page (run through pytest).",
+  "devDependencies": { "jsdom": "^29.0.0" }
+}

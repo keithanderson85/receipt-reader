@@ -6,7 +6,7 @@
 
 {% block content %}
 <style>
-    .capture-wrap { max-width: 640px; margin: 0 auto; padding-bottom: 7rem; }
+    .capture-wrap { max-width: 640px; margin: 0 auto; padding-bottom: 8rem; }
     .capture-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
     .capture-actions .btn { padding: 1.1rem .5rem; font-weight: 600; border-radius: var(--radius-lg); }
     .capture-actions .btn i { display: block; font-size: 1.6rem; margin-bottom: .25rem; }
@@ -27,14 +27,15 @@
         border-top: 1px solid var(--border); padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom));
     }
     .capture-bar .inner { max-width: 640px; margin: 0 auto; }
-    .reading-overlay {
-        position: fixed; inset: 0; z-index: 2000; background: rgba(15,23,42,.8);
-        display: none; align-items: center; justify-content: center; color: #fff; text-align: center; padding: 2rem;
-    }
-    .reading-overlay.show { display: flex; }
+    .verdict { border-radius: var(--radius-lg); padding: 1rem 1.1rem; border: 1px solid transparent; }
+    .verdict.new { background: var(--success-bg); border-color: #a7f3d0; color: #065f46; }
+    .verdict.duplicate { background: var(--error-bg); border-color: #fecaca; color: #991b1b; }
+    .verdict.maybe { background: var(--warning-bg); border-color: #fde68a; color: #92400e; }
+    .verdict.pending { background: #f1f5f9; border-color: var(--border); color: var(--text-secondary); }
+    .verdict .big { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; color: var(--text-primary); }
 </style>
 
-<div class="capture-wrap">
+<div class="capture-wrap" id="captureView">
     <div class="page-header mb-3">
         <h1 class="mb-1">New receipt</h1>
         <p class="text-secondary mb-0">Long receipt? Take several photos, top to bottom, with a little overlap. They're read together as one receipt.</p>
@@ -67,25 +68,40 @@
     </div>
 </div>
 
-<div class="capture-bar">
+<!-- After saving: quick result + duplicate verdict -->
+<div class="capture-wrap d-none" id="resultView">
+    <div class="text-center mb-3">
+        <div class="display-5 text-success"><i class="bi bi-check-circle-fill"></i></div>
+        <h1 class="h3 fw-bold mb-0">Saved</h1>
+        <div class="text-secondary small">You can put your phone away - the rest happens in the background.</div>
+    </div>
+
+    <div id="verdict" class="verdict pending mb-3">
+        <div class="d-flex align-items-center gap-2"><span class="spinner-border spinner-border-sm"></span> Reading the total and date…</div>
+    </div>
+
+    <div class="small text-secondary text-center mb-4" id="fullStatus"><span class="spinner-border spinner-border-sm me-1"></span>Reading the items…</div>
+
+    <div class="d-grid gap-2">
+        <button type="button" class="btn btn-success btn-lg btn-tap" id="againBtn"><i class="bi bi-camera-fill me-1"></i> Scan another</button>
+        <a href="{{ url_for('inbox') }}" class="btn btn-outline-secondary btn-tap"><i class="bi bi-inbox me-1"></i> Open inbox</a>
+        <a href="#" class="btn btn-link d-none" id="reviewNow">Review now</a>
+    </div>
+</div>
+
+<div class="capture-bar" id="captureBar">
     <div class="inner d-flex gap-2">
         <button type="button" class="btn btn-outline-secondary" id="clearBtn" disabled title="Start over">
             <i class="bi bi-trash"></i>
         </button>
-        <button type="button" class="btn btn-success btn-lg flex-grow-1" id="readBtn" disabled>
-            <i class="bi bi-lightning-charge-fill me-1"></i> <span id="readLabel">Read receipt</span>
+        <button type="button" class="btn btn-success btn-lg flex-grow-1" id="saveBtn" disabled>
+            <i class="bi bi-lightning-charge-fill me-1"></i> <span id="saveLabel">Save receipt</span>
         </button>
     </div>
+    <div class="text-center mt-1"><button type="button" class="btn btn-link btn-sm text-secondary p-0" id="reviewNowBtn" disabled>or read &amp; review it right now</button></div>
 </div>
 
-<div class="reading-overlay" id="overlay">
-    <div>
-        <div class="spinner-border mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
-        <h5 id="overlayTitle">Reading receipt…</h5>
-        <p class="mb-0 opacity-75" id="overlayText">This can take up to a minute for long receipts.</p>
-        <button type="button" class="btn btn-light mt-4 d-none" id="overlayClose">Back to photos</button>
-    </div>
-</div>
+<div id="errorBox" class="alert alert-danger d-none position-fixed start-0 end-0 mx-3" style="bottom: 8.5rem; z-index: 1040;" role="alert"></div>
 
 <form id="csrfForm" class="d-none">{{ form.hidden_tag() }}</form>
 {% endblock %}
@@ -95,11 +111,16 @@
 (function () {
     const MAX_PHOTOS = {{ max_photos }};
     const MAX_SIDE = 4096, MAX_PIXELS = 6e6;
-    const PROCESS_URL = {{ url_for('capture_process')|tojson }};
+    const URLS = {
+        submit: {{ url_for('capture_submit')|tojson }},
+        process: {{ url_for('capture_process')|tojson }},
+        inbox: {{ url_for('inbox')|tojson }},
+    };
 
     const $ = id => document.getElementById(id);
-    const list = $('photoList'), notice = $('notice'), overlay = $('overlay');
+    const list = $('photoList'), notice = $('notice');
     let photos = [];   // {blob, url, hash, w, h}
+    let pollTimer = null;
 
     // ---- helpers ---------------------------------------------------------
     function showNotice(msg) {
@@ -107,6 +128,13 @@
         notice.classList.remove('d-none');
         clearTimeout(showNotice.t);
         showNotice.t = setTimeout(() => notice.classList.add('d-none'), 6000);
+    }
+    function showError(msg) {
+        const box = $('errorBox');
+        box.textContent = msg;
+        box.classList.remove('d-none');
+        clearTimeout(showError.t);
+        showError.t = setTimeout(() => box.classList.add('d-none'), 8000);
     }
 
     // Shrink big camera photos before upload (keeps tall receipts readable).
@@ -164,7 +192,7 @@
                 const b = document.createElement('button');
                 b.type = 'button'; b.className = 'btn btn-sm btn-light'; b.disabled = !!disabled;
                 b.setAttribute('aria-label', label);
-                b.innerHTML = `<i class="bi ${icon}"></i>`;
+                const ic = document.createElement('i'); ic.className = 'bi ' + icon; b.append(ic);
                 b.addEventListener('click', fn);
                 return b;
             };
@@ -181,19 +209,18 @@
 
         const n = photos.length;
         $('emptyState').classList.toggle('d-none', n > 0);
-        $('readBtn').disabled = n === 0;
+        $('saveBtn').disabled = n === 0;
+        $('reviewNowBtn').disabled = n === 0;
         $('clearBtn').disabled = n === 0;
-        $('readLabel').textContent = n > 1 ? `Read receipt (${n} photos)` : 'Read receipt';
+        $('saveLabel').textContent = n > 1 ? `Save receipt (${n} photos)` : 'Save receipt';
         $('takeBtn').disabled = $('pickBtn').disabled = n >= MAX_PHOTOS;
     }
 
-    function move(i, d) {
-        [photos[i], photos[i + d]] = [photos[i + d], photos[i]];
-        render();
-    }
-    function remove(i) {
-        URL.revokeObjectURL(photos[i].url);
-        photos.splice(i, 1);
+    function move(i, d) { [photos[i], photos[i + d]] = [photos[i + d], photos[i]]; render(); }
+    function remove(i) { URL.revokeObjectURL(photos[i].url); photos.splice(i, 1); render(); }
+    function reset() {
+        photos.forEach(p => URL.revokeObjectURL(p.url));
+        photos = [];
         render();
     }
 
@@ -224,47 +251,150 @@
         });
     }
     $('clearBtn').addEventListener('click', () => {
-        if (!confirm('Remove all photos and start over?')) return;
-        photos.forEach(p => URL.revokeObjectURL(p.url));
-        photos = [];
-        render();
+        if (confirm('Remove all photos and start over?')) reset();
     });
 
-    function showOverlayError(msg) {
-        $('overlay').querySelector('.spinner-border').classList.add('d-none');
-        $('overlayTitle').textContent = "Couldn't read that receipt";
-        $('overlayText').textContent = msg;
-        $('overlayClose').classList.remove('d-none');
-    }
-    $('overlayClose').addEventListener('click', () => {
-        overlay.classList.remove('show');
-        $('overlay').querySelector('.spinner-border').classList.remove('d-none');
-        $('overlayTitle').textContent = 'Reading receipt…';
-        $('overlayText').textContent = 'This can take up to a minute for long receipts.';
-        $('overlayClose').classList.add('d-none');
-    });
-
-    $('readBtn').addEventListener('click', async () => {
-        if (!photos.length) return;
-        overlay.classList.add('show');
-        $('overlayTitle').textContent = photos.length > 1
-            ? `Reading ${photos.length} photos as one receipt…` : 'Reading receipt…';
-
+    function formData() {
         const fd = new FormData($('csrfForm'));
         fd.append('autocrop', $('autocropToggle').checked ? '1' : '0');
         photos.forEach((p, i) => fd.append('photos', p.blob, `photo_${i + 1}.jpg`));
+        return fd;
+    }
 
+    function setBusy(busy, label) {
+        for (const id of ['saveBtn', 'reviewNowBtn', 'clearBtn']) $(id).disabled = busy || photos.length === 0;
+        $('saveLabel').textContent = busy ? label : (photos.length > 1 ? `Save receipt (${photos.length} photos)` : 'Save receipt');
+    }
+
+    // ---- save and go -------------------------------------------------------
+    $('saveBtn').addEventListener('click', async () => {
+        if (!photos.length) return;
+        setBusy(true, 'Saving…');
         try {
-            const resp = await fetch(PROCESS_URL, { method: 'POST', body: fd });
+            const resp = await fetch(URLS.submit, { method: 'POST', body: formData() });
             const data = await resp.json().catch(() => ({}));
             if (resp.ok && data.success) {
-                window.location.href = data.redirect_url;
+                showResult(data.status_url);
             } else {
-                showOverlayError(data.error || `Server error (${resp.status}). Please try again.`);
+                showError(data.error || `Server error (${resp.status}). Please try again.`);
+                setBusy(false);
             }
         } catch (err) {
-            showOverlayError('Network error - check your connection and try again.');
+            showError('Network error - check your connection and try again.');
+            setBusy(false);
         }
+    });
+
+    // the old behaviour: read now and go straight to the review screen
+    $('reviewNowBtn').addEventListener('click', async () => {
+        if (!photos.length) return;
+        setBusy(true, 'Reading…');
+        try {
+            const resp = await fetch(URLS.process, { method: 'POST', body: formData() });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.ok && data.success) { window.location.href = data.redirect_url; return; }
+            showError(data.error || `Server error (${resp.status}). Please try again.`);
+        } catch (err) {
+            showError('Network error - check your connection and try again.');
+        }
+        setBusy(false);
+    });
+
+    // ---- the result panel ----------------------------------------------------
+    const money = v => '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    function el(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    function renderVerdict(s) {
+        const box = $('verdict');
+        const haveQuick = s.quick_status === 'done' || s.amount !== null;
+        if (!haveQuick && s.quick_status !== 'failed' && s.status === 'processing') return;   // keep the spinner
+        box.replaceChildren();
+
+        if (s.amount === null && !s.date) {
+            box.className = 'verdict maybe mb-3';
+            box.append(el('div', 'fw-semibold', "Couldn't read the total or date yet"),
+                       el('div', 'small', 'It will be checked once the full read finishes - see your inbox.'));
+            return;
+        }
+        const line = el('div', 'big', [s.merchant, s.amount !== null ? money(s.amount) : null].filter(Boolean).join(' · ') || 'Receipt');
+        box.append(line, el('div', 'small mb-2', s.date ? s.date : 'Date not read'));
+
+        const m = (s.matches || [])[0];
+        if (s.dup_status === 'duplicate' || s.dup_status === 'maybe') {
+            box.className = 'verdict ' + (s.dup_status === 'duplicate' ? 'duplicate' : 'maybe') + ' mb-3';
+            const head = el('div', 'fw-semibold');
+            head.append(el('i', 'bi bi-exclamation-triangle-fill me-1'),
+                        s.dup_status === 'duplicate' ? 'Possible duplicate' : 'Same total and date as another receipt');
+            box.append(head);
+            if (m) {
+                const what = m.kind === 'expense' ? 'saved' : 'in your inbox';
+                box.append(el('div', 'small', `${m.merchant || 'Unknown store'} · ${m.date || ''} · ${m.amount !== null ? money(m.amount) : ''} (${what})`));
+            }
+        } else if (s.dup_status === 'new') {
+            box.className = 'verdict new mb-3';
+            const head = el('div', 'fw-semibold');
+            head.append(el('i', 'bi bi-check-circle-fill me-1'), 'New receipt - not in your records');
+            box.append(head);
+        } else {
+            box.className = 'verdict pending mb-3';
+        }
+    }
+
+    function renderFull(s) {
+        const box = $('fullStatus'), link = $('reviewNow');
+        box.replaceChildren();
+        if (s.status === 'processing') {
+            box.append(el('span', 'spinner-border spinner-border-sm me-1'), 'Reading the items…');
+        } else if (s.status === 'error') {
+            box.className = 'small text-danger text-center mb-4';
+            box.textContent = (s.error || "Couldn't read this receipt") + ' - you can retry it from the inbox.';
+        } else {
+            box.className = 'small text-success text-center mb-4';
+            box.textContent = s.status === 'ready' ? '✓ Fully read - ready to approve in your inbox.'
+                                                   : '✓ Fully read - needs a quick look in your inbox.';
+            if (s.review_url) { link.href = s.review_url; link.classList.remove('d-none'); }
+        }
+    }
+
+    function showResult(statusUrl) {
+        $('captureView').classList.add('d-none');
+        $('captureBar').classList.add('d-none');
+        $('resultView').classList.remove('d-none');
+        window.scrollTo(0, 0);
+        const started = Date.now();
+
+        const tick = async () => {
+            try {
+                const s = await (await fetch(statusUrl)).json();
+                if (s.success) {
+                    renderVerdict(s);
+                    renderFull(s);
+                    if (s.status !== 'processing') return;
+                }
+            } catch (e) { /* keep trying */ }
+            if (Date.now() - started < 4 * 60 * 1000) pollTimer = setTimeout(tick, 1500);
+        };
+        tick();
+    }
+
+    $('againBtn').addEventListener('click', () => {
+        clearTimeout(pollTimer);
+        reset();
+        setBusy(false);
+        $('verdict').className = 'verdict pending mb-3';
+        $('verdict').replaceChildren(el('span', 'spinner-border spinner-border-sm me-2'), 'Reading the total and date…');
+        $('fullStatus').className = 'small text-secondary text-center mb-4';
+        $('reviewNow').classList.add('d-none');
+        $('resultView').classList.add('d-none');
+        $('captureView').classList.remove('d-none');
+        $('captureBar').classList.remove('d-none');
+        window.scrollTo(0, 0);
     });
 
     // remember the auto-crop choice on this phone

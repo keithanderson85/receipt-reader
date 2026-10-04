@@ -35,7 +35,7 @@ def A(app_module, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'uploads').mkdir()
     (tmp_path / 'reviews' / 'ocr').mkdir(parents=True)
-    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False,
+    app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False, SCANS_SYNC=True,      # readers run inline
                                  UPLOAD_FOLDER=str(tmp_path / 'uploads'))
     monkeypatch.setattr(app_module, 'BULK_REVIEW_FOLDER', str(tmp_path / 'reviews'))
     monkeypatch.setattr(app_module, 'OCR_CACHE_FOLDER', str(tmp_path / 'reviews' / 'ocr'))
@@ -52,14 +52,24 @@ class OcrStub:
             'discount_amount': 0, 'items': [],
         }
         self.error = None
+        self.quick_response = None      # defaults to the merchant/amount/date of .response
+        self.quick_error = None
         self.calls = []
 
     def __call__(self, messages, model=None, max_retries=3, max_tokens=2500):
         content = messages[0]['content']
+        quick = 'Read ONLY these three things' in content[0]['text']
         self.calls.append({
             'prompt': content[0]['text'],
             'images': sum(1 for c in content if c['type'] == 'image_url'),
+            'kind': 'quick' if quick else 'full',
         })
+        if quick:
+            if self.quick_error:
+                raise self.quick_error
+            if self.quick_response is not None:
+                return self.quick_response if isinstance(self.quick_response, str) else json.dumps(self.quick_response)
+            return json.dumps({k: self.response.get(k) for k in ('merchant_name', 'amount', 'date')})
         if self.error:
             raise self.error
         return json.dumps(self.response)

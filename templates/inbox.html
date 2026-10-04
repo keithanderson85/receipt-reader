@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Inbox - Receipt Reader{% endblock %}
+
+{% block content %}
+{% set processing = scans | selectattr('status', 'equalto', 'processing') | list %}
+
+<div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+    <div>
+        <h1 class="h3 fw-bold mb-0" style="letter-spacing:-.03em;">Inbox</h1>
+        <div class="text-secondary small">
+            {% if scans %}{{ scans|length }} receipt{{ '' if scans|length == 1 else 's' }} waiting{% if processing %} · {{ processing|length }} still reading{% endif %}
+            {% else %}Scanned receipts wait here until you approve them.{% endif %}
+        </div>
+    </div>
+    {% if clean_count %}
+    <form method="post" action="{{ url_for('inbox_approve_ready') }}">
+        {{ form.hidden_tag() }}
+        <button type="submit" class="btn btn-success"><i class="bi bi-check2-all me-1"></i>Approve {{ clean_count }} clean</button>
+    </form>
+    {% endif %}
+</div>
+
+{% if not scans %}
+<div class="card"><div class="empty-state">
+    <i class="bi bi-inbox"></i>
+    <h5>Nothing waiting</h5>
+    <p class="mb-3">Snap a receipt in the store and it will show up here, already read and checked for duplicates.</p>
+    <a href="{{ url_for('capture_page') }}" class="btn btn-success"><i class="bi bi-camera-fill me-1"></i> Scan a receipt</a>
+</div></div>
+{% endif %}
+
+<div class="d-grid gap-3">
+{% for scan in scans %}
+    {% set info = scan.summary %}
+    {% set matches = (scan.dup_info or {}).get('matches', []) %}
+    <div class="card inbox-card {{ 'inbox-' ~ scan.status }}" data-scan="{{ scan.id }}">
+        <div class="card-body p-3">
+            <div class="d-flex gap-3">
+                <a href="{{ url_for('uploaded_file', filename=scan.filename) }}" target="_blank" class="inbox-thumb" aria-label="View receipt photo">
+                    <img src="{{ url_for('uploaded_file', filename=scan.filename) }}" alt="" onerror="this.style.visibility='hidden'">
+                </a>
+                <div class="flex-grow-1" style="min-width:0;">
+                    <div class="d-flex justify-content-between align-items-baseline gap-2">
+                        <div class="fw-semibold text-truncate">
+                            {% if info.merchant %}{{ info.merchant }}{% elif scan.status == 'processing' %}Reading…{% else %}Unknown store{% endif %}
+                        </div>
+                        <div class="money flex-shrink-0">{% if info.amount is not none %}${{ "{:,.2f}".format(info.amount) }}{% endif %}</div>
+                    </div>
+                    <div class="small text-secondary">
+                        {{ info.date or ('Date not read yet' if scan.status == 'processing' else 'No date') }}
+                        {% if scan.photo_count > 1 %}· {{ scan.photo_count }} photos{% endif %}
+                    </div>
+
+                    <div class="mt-2 d-flex flex-wrap gap-1">
+                        {% if scan.status == 'processing' %}
+                            <span class="badge text-bg-secondary"><span class="spinner-border spinner-border-sm me-1" style="width:.7rem;height:.7rem;"></span>Reading</span>
+                        {% elif scan.status == 'error' %}
+                            <span class="badge text-bg-danger"><i class="bi bi-x-circle me-1"></i>{{ scan.error or 'Could not be read' }}</span>
+                        {% endif %}
+                        {% if scan.dup_status == 'new' %}
+                            <span class="badge text-bg-success"><i class="bi bi-check2 me-1"></i>New receipt</span>
+                        {% elif scan.dup_status == 'duplicate' %}
+                            <span class="badge text-bg-danger"><i class="bi bi-files me-1"></i>Duplicate</span>
+                        {% elif scan.dup_status == 'maybe' %}
+                            <span class="badge text-bg-warning"><i class="bi bi-exclamation-triangle me-1"></i>Same total &amp; date</span>
+                        {% endif %}
+                        {% for reason in (scan.notes or []) if scan.status == 'needs_review' and not reason.startswith('Looks like') and not reason.startswith('Same total') %}
+                            <span class="badge text-bg-warning">{{ reason }}</span>
+                        {% endfor %}
+                    </div>
+
+                    {% if matches %}
+                    <div class="small mt-2 text-secondary">
+                        Matches
+                        {% set m = matches[0] %}
+                        {% if m.kind == 'expense' %}
+                            <a href="{{ url_for('edit_expense', expense_id=m.id) }}">{{ m.merchant }} · {{ m.date }} · ${{ "%.2f"|format(m.amount) }}</a> (saved)
+                        {% else %}
+                            another receipt in this inbox ({{ m.merchant or 'unknown store' }}, {{ m.date or 'no date' }})
+                        {% endif %}
+                        {% if matches|length > 1 %}and {{ matches|length - 1 }} more{% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="d-flex gap-2 mt-3 flex-wrap">
+                {% if scan.status in ('ready', 'needs_review') %}
+                    {% if scan.dup_status == 'new' and scan.status == 'ready' %}
+                    <form method="post" action="{{ url_for('inbox_approve', scan_id=scan.id) }}" class="flex-grow-1">
+                        {{ form.hidden_tag() }}
+                        <button class="btn btn-success w-100"><i class="bi bi-check-lg me-1"></i>Approve</button>
+                    </form>
+                    {% endif %}
+                    <a href="{{ url_for('inbox_review', scan_id=scan.id) }}" class="btn {{ 'btn-outline-primary' if scan.status == 'ready' else 'btn-primary flex-grow-1' }}"><i class="bi bi-pencil me-1"></i>Review</a>
+                    {% if scan.dup_status in ('duplicate', 'maybe') %}
+                    <form method="post" action="{{ url_for('inbox_approve', scan_id=scan.id) }}" onsubmit="return confirm('Save this even though it looks like a duplicate?')">
+                        {{ form.hidden_tag() }}<input type="hidden" name="force" value="1">
+                        <button class="btn btn-outline-secondary">Save anyway</button>
+                    </form>
+                    {% endif %}
+                {% elif scan.status == 'error' %}
+                    <form method="post" action="{{ url_for('inbox_retry', scan_id=scan.id) }}" class="flex-grow-1">
+                        {{ form.hidden_tag() }}
+                        <button class="btn btn-primary w-100"><i class="bi bi-arrow-repeat me-1"></i>Retry</button>
+                    </form>
+                {% endif %}
+                <form method="post" action="{{ url_for('inbox_discard', scan_id=scan.id) }}" onsubmit="return confirm('Discard this receipt and delete its photo?')">
+                    {{ form.hidden_tag() }}
+                    <button class="btn btn-outline-secondary" aria-label="Discard"><i class="bi bi-trash"></i></button>
+                </form>
+            </div>
+        </div>
+    </div>
+{% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if processing %}
+<script>
+// still reading: refresh until everything is done
+setTimeout(function () { location.reload(); }, 4000);
+</script>
+{% endif %}
+{% endblock %}

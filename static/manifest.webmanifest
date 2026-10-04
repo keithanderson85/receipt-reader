@@ -16,6 +16,7 @@
   ],
   "shortcuts": [
     {"name": "New receipt", "short_name": "Scan", "url": "/capture?source=shortcut", "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192"}]},
+    {"name": "Inbox", "url": "/inbox?source=shortcut", "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192"}]},
     {"name": "Expenses", "url": "/expenses?source=shortcut", "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192"}]}
   ]
 }
