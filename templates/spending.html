@@ -4,15 +4,57 @@
 
 {% macro money(v) %}${{ "{:,.2f}".format(v or 0) }}{% endmacro %}
 
+{% macro ranked_chart(items, title_id, title, subtitle, first_col, share_of='total') %}
+{% set chart_items = items[:15] %}
+<section class="viz-card mb-4" aria-labelledby="{{ title_id }}">
+    <h2 class="viz-title" id="{{ title_id }}">{{ title }}</h2>
+    <div class="viz-subtitle">{{ subtitle }}{% if items|length > chart_items|length %} · top {{ chart_items|length }} of {{ items|length }} - use Table for all{% endif %}</div>
+
+    <div class="viz-chart" data-viz="chart">
+        {% for r in chart_items %}
+        {% set tag = 'a' if r.href else 'div' %}
+        <{{ tag }} class="hbar-row" {% if r.href %}href="{{ r.href }}"{% endif %} tabindex="0" data-tip
+            data-name="{{ r.name }}" data-value="{{ money(r.total) }}"
+            data-detail="{{ r.count }} receipt{{ '' if r.count == 1 else 's' }} · {{ money(r.avg) }} avg · {{ '%.1f'|format(r.share) }}% of {{ share_of }}">
+            <span class="hbar-label">{{ r.name }}</span>
+            <span class="hbar-track">
+                <span class="hbar" style="--p: {{ '%.4f'|format(r.ratio) }};"></span>
+                <span class="hbar-value">{{ money(r.total) }}</span>
+            </span>
+        </{{ tag }}>
+        {% endfor %}
+    </div>
+
+    <div class="viz-table" data-viz="table" hidden>
+        <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>{{ first_col }}</th><th class="text-end">Total</th><th class="text-end">Receipts</th><th class="text-end d-none d-sm-table-cell">Average</th><th class="text-end">Share</th><th class="d-none d-md-table-cell">Last receipt</th></tr></thead>
+            <tbody>
+            {% for r in items %}
+            <tr>
+                <td>{% if r.href %}<a href="{{ r.href }}" class="text-decoration-none">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
+                <td class="text-end fw-semibold">{{ money(r.total) }}</td>
+                <td class="text-end">{{ r.count }}</td>
+                <td class="text-end d-none d-sm-table-cell">{{ money(r.avg) }}</td>
+                <td class="text-end">{{ '%.1f'|format(r.share) }}%</td>
+                <td class="d-none d-md-table-cell text-secondary">{{ r.last_date }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</section>
+{% endmacro %}
+
 {% block content %}
 {% set store = selected.name if selected else '' %}
 {% set nav_args = {'group': group, 'store': store} if store else {'group': group} %}
-{% set chart_rows = rows[:15] %}
 
 <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
     <div style="min-width:0;">
         {% if selected %}
-        <a href="{{ url_for('spending', period=period, group=group, start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}" class="small text-decoration-none"><i class="bi bi-arrow-left"></i> All stores</a>
+        <a href="{{ url_for('spending', period=period, group=group, start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}" class="small text-decoration-none"><i class="bi bi-arrow-left"></i> {{ 'All brands' if group == 'brand' else 'All stores' }}</a>
         <h1 class="h3 fw-bold mb-0" style="letter-spacing:-.03em; overflow-wrap:anywhere;">{{ selected.name }}</h1>
         {% else %}
         <h1 class="h3 fw-bold mb-0" style="letter-spacing:-.03em;">Spending</h1>
@@ -45,6 +87,7 @@
 {% if not selected %}
 <div class="btn-group btn-group-sm mb-4" role="group" aria-label="Group by">
     <a class="btn btn-outline-secondary {% if group == 'store' %}active{% endif %}" href="{{ url_for('spending', period=period, group='store', start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}">By store</a>
+    <a class="btn btn-outline-secondary {% if group == 'brand' %}active{% endif %}" href="{{ url_for('spending', period=period, group='brand', start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}">By brand</a>
     <a class="btn btn-outline-secondary {% if group == 'city' %}active{% endif %}" href="{{ url_for('spending', period=period, group='city', start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}">By city</a>
 </div>
 {% endif %}
@@ -56,7 +99,7 @@
     <div class="row g-2 mt-2">
         <div class="col-4"><div class="stat-tile"><div class="label">Receipts</div><div class="value">{{ count }}</div></div></div>
         <div class="col-4"><div class="stat-tile"><div class="label">Average</div><div class="value">{{ money(average) }}</div></div></div>
-        <div class="col-4"><div class="stat-tile"><div class="label">{% if selected %}Share{% elif group == 'city' %}Cities{% else %}Stores{% endif %}</div>
+        <div class="col-4"><div class="stat-tile"><div class="label">{% if selected %}Share{% elif group == 'city' %}Cities{% elif group == 'brand' %}Brands{% else %}Stores{% endif %}</div>
             <div class="value">{% if selected %}{{ '%.0f'|format(selected.share) }}%{% else %}{{ group_count }}{% endif %}</div></div></div>
     </div>
 </div>
@@ -69,47 +112,39 @@
 </div></div>
 {% else %}
 
-{% if not selected %}
-<!-- Ranked totals -->
-<section class="viz-card mb-4" aria-labelledby="byGroupTitle">
-    <h2 class="viz-title" id="byGroupTitle">Spending by {{ 'city' if group == 'city' else 'store' }}</h2>
-    <div class="viz-subtitle">{{ period_label }}{% if rows|length > chart_rows|length %} · top {{ chart_rows|length }} of {{ rows|length }} - use Table for all{% endif %}</div>
-
-    <div class="viz-chart" data-viz="chart">
-        {% for r in chart_rows %}
-        {% set tag = 'a' if r.href else 'div' %}
-        <{{ tag }} class="hbar-row" {% if r.href %}href="{{ r.href }}"{% endif %} tabindex="0" data-tip
-            data-name="{{ r.name }}" data-value="{{ money(r.total) }}"
-            data-detail="{{ r.count }} receipt{{ '' if r.count == 1 else 's' }} · {{ money(r.avg) }} avg · {{ '%.1f'|format(r.share) }}% of total">
-            <span class="hbar-label">{{ r.name }}</span>
-            <span class="hbar-track">
-                <span class="hbar" style="--p: {{ '%.4f'|format(r.ratio) }};"></span>
-                <span class="hbar-value">{{ money(r.total) }}</span>
-            </span>
-        </{{ tag }}>
-        {% endfor %}
-    </div>
-
-    <div class="viz-table" data-viz="table" hidden>
-        <div class="table-responsive">
-        <table class="table table-sm align-middle mb-0">
-            <thead><tr><th>{{ 'City' if group == 'city' else 'Store' }}</th><th class="text-end">Total</th><th class="text-end">Receipts</th><th class="text-end d-none d-sm-table-cell">Average</th><th class="text-end">Share</th><th class="d-none d-md-table-cell">Last receipt</th></tr></thead>
-            <tbody>
-            {% for r in rows %}
-            <tr>
-                <td>{% if r.href %}<a href="{{ r.href }}" class="text-decoration-none">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
-                <td class="text-end fw-semibold">{{ money(r.total) }}</td>
-                <td class="text-end">{{ r.count }}</td>
-                <td class="text-end d-none d-sm-table-cell">{{ money(r.avg) }}</td>
-                <td class="text-end">{{ '%.1f'|format(r.share) }}%</td>
-                <td class="d-none d-md-table-cell text-secondary">{{ r.last_date }}</td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
+{% if unassigned and not selected %}
+<!-- One-time job: tell the app which saved location a printed store number belongs to -->
+<section class="viz-card mb-4" aria-labelledby="matchTitle">
+    <h2 class="viz-title" id="matchTitle">Match store numbers to your locations</h2>
+    <div class="viz-subtitle">These receipts print a store number but no address. Say which location each number is, once, and they'll count there.</div>
+    {% for u in unassigned %}
+    <form method="post" action="{{ url_for('assign_store_code') }}" class="d-flex flex-wrap align-items-center gap-2 py-2 border-top">
+        {{ form.hidden_tag() }}
+        <input type="hidden" name="code" value="{{ u.code }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <div class="flex-grow-1" style="min-width: 150px;">
+            <div class="fw-semibold">{{ u.brand }} #{{ u.code }}</div>
+            <div class="small text-secondary">{{ u.count }} receipt{{ '' if u.count == 1 else 's' }} · {{ money(u.total) }}</div>
         </div>
-    </div>
+        <select name="location_id" class="form-select form-select-sm w-auto" required aria-label="Location for #{{ u.code }}">
+            <option value="">Which location?</option>
+            {% for l in u.locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}
+        </select>
+        <button class="btn btn-primary btn-sm">Save</button>
+    </form>
+    {% endfor %}
 </section>
+{% endif %}
+
+{% if not selected %}
+{{ ranked_chart(rows, 'byGroupTitle', 'Spending by ' ~ ('city' if group == 'city' else 'brand' if group == 'brand' else 'store'), period_label, 'City' if group == 'city' else 'Brand' if group == 'brand' else 'Store') }}
+{% if group == 'store' and unplaced_count %}
+<p class="small text-secondary" style="margin-top: -.75rem; margin-bottom: 1.5rem;">
+    “(no location)” is {{ unplaced_count }} receipt{{ '' if unplaced_count == 1 else 's' }} ({{ money(unplaced_total) }}) saved without an address or store number, so they can't be placed at a specific store.
+</p>
+{% endif %}
+{% elif group == 'brand' and children %}
+{{ ranked_chart(children, 'childrenTitle', 'Locations', period_label, 'Store', 'this brand') }}
 {% endif %}
 
 <!-- Over time -->
@@ -153,7 +188,7 @@
 <div class="row-list mb-4">
     {% for r in recent %}
     <a href="{{ url_for('edit_expense', expense_id=r.id) }}" class="row-item">
-        <span class="row-main"><div class="row-title">{{ r.date }}</div></span>
+        <span class="row-main"><div class="row-title">{{ r.date }}</div>{% if group == 'brand' %}<div class="row-meta">{{ r.store }}</div>{% endif %}</span>
         <span class="row-amount">{{ money(r.amount) }}</span>
     </a>
     {% endfor %}

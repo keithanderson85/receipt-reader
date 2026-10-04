@@ -175,7 +175,7 @@ def test_custom_period_survives_the_drilldown_link(client, stores):
 def test_view_all_receipts_link_carries_the_store_and_dates(client, stores):
     html = page(client, '?period=this_year&store=Starbucks')
     link = re.search(r'href="(/expenses\?[^"]*)"[^>]*>View all receipts', html).group(1).replace('&amp;', '&')
-    assert 'location=Starbucks' in link and f'start_date={TODAY.year}-01-01' in link
+    assert 'store=Starbucks' in link and f'start_date={TODAY.year}-01-01' in link
     assert client.get(link).status_code == 200
 
 

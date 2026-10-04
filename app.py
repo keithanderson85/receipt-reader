@@ -19,6 +19,7 @@ import pandas as pd
 from receipt_ocr_genai import ReceiptOCRGenAI
 from receipt_crop import auto_crop_file
 from receipt_items import subtotal_note
+from store_resolver import StoreIndex, normalize_code
 import scan_store
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
@@ -26,6 +27,7 @@ import json
 import logging
 import traceback
 import difflib
+from collections import defaultdict
 import re
 
 app = Flask(__name__)
@@ -258,6 +260,13 @@ def init_db():
     # Add user_id column if it doesn't exist (for existing databases)
     try:
         cursor.execute('ALTER TABLE locations ADD COLUMN user_id INTEGER')
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    # Store numbers (e.g. E0205) that identify a location on receipts that carry no address
+    try:
+        cursor.execute('ALTER TABLE locations ADD COLUMN store_codes TEXT')
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -728,66 +737,37 @@ def find_matching_location(address_str, user_id=None):
 @app.route('/locations')
 @login_required
 def locations_page():
-    """Manage known locations with spending statistics."""
+    """Manage known locations with spending statistics (placed with the same logic as the spending page)."""
     conn = sqlite3.connect('receipts.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, address, category FROM locations WHERE user_id = ? ORDER BY name ASC', (current_user.id,))
+    cursor.execute('SELECT id, name, address, category, store_codes FROM locations WHERE user_id = ? ORDER BY name ASC', (current_user.id,))
     locations = cursor.fetchall()
-    
-    # Calculate spending analytics per known location
-    location_stats = []
-    current_year = datetime.now().strftime('%Y')
-    current_month = datetime.now().strftime('%m')
-    
-    for loc in locations:
-        loc_id, name, address, category = loc
-        
-        # All-time spend
-        cursor.execute('''
-            SELECT COUNT(*), COALESCE(SUM(amount), 0)
-            FROM expenses
-            WHERE user_id = ? AND (
-                merchant_name LIKE ? OR 
-                (address IS NOT NULL AND address != '' AND address LIKE ?)
-            )
-        ''', (current_user.id, f'%{name}%', f'%{address[:15]}%' if address else 'NONE'))
-        all_time_count, all_time_total = cursor.fetchone()
-        
-        # This year spend
-        cursor.execute('''
-            SELECT COUNT(*), COALESCE(SUM(amount), 0)
-            FROM expenses
-            WHERE user_id = ? AND strftime('%Y', date) = ? AND (
-                merchant_name LIKE ? OR 
-                (address IS NOT NULL AND address != '' AND address LIKE ?)
-            )
-        ''', (current_user.id, current_year, f'%{name}%', f'%{address[:15]}%' if address else 'NONE'))
-        year_count, year_total = cursor.fetchone()
-        
-        # This month spend
-        cursor.execute('''
-            SELECT COUNT(*), COALESCE(SUM(amount), 0)
-            FROM expenses
-            WHERE user_id = ? AND strftime('%Y', date) = ? AND strftime('%m', date) = ? AND (
-                merchant_name LIKE ? OR 
-                (address IS NOT NULL AND address != '' AND address LIKE ?)
-            )
-        ''', (current_user.id, current_year, current_month, f'%{name}%', f'%{address[:15]}%' if address else 'NONE'))
-        month_count, month_total = cursor.fetchone()
-        
-        location_stats.append({
-            'id': loc_id,
-            'name': name,
-            'address': address,
-            'category': category,
-            'all_time_count': all_time_count,
-            'all_time_total': all_time_total,
-            'year_total': year_total,
-            'month_total': month_total
-        })
-        
     conn.close()
-    
+
+    index, expenses = _load_store_index(current_user.id)
+    current_year = datetime.now().strftime('%Y')
+    current_month = datetime.now().strftime('%Y-%m')
+    spend = defaultdict(lambda: {'count': 0, 'all': 0.0, 'year': 0.0, 'month': 0.0})
+    for e in expenses:
+        location_id = index.resolve(e['merchant_name'], e['address'])['location_id']
+        if location_id is None:
+            continue
+        s_ = spend[location_id]
+        amount, when = e['amount'] or 0, e['date'] or ''
+        s_['count'] += 1
+        s_['all'] += amount
+        if when.startswith(current_year):
+            s_['year'] += amount
+        if when.startswith(current_month):
+            s_['month'] += amount
+
+    location_stats = [{
+        'id': loc_id, 'name': name, 'address': address, 'category': category,
+        'store_codes': _parse_store_codes(codes)[0],
+        'all_time_count': spend[loc_id]['count'], 'all_time_total': spend[loc_id]['all'],
+        'year_total': spend[loc_id]['year'], 'month_total': spend[loc_id]['month'],
+    } for loc_id, name, address, category, codes in locations]
+
     form = LocationForm()
     return render_template('locations.html', locations=location_stats, form=form, current_year=current_year)
 
@@ -1798,33 +1778,50 @@ def _month_iter(start, end):
         d = (d + timedelta(days=32)).replace(day=1)
 
 
-def _trend_buckets(cursor, user_id, start, end, store_key):
+def _city_of(location):
+    text = (location or '').strip()
+    if not text:
+        return 'Unknown'
+    if 'reno' in text.lower():
+        return 'Reno, NV'
+    if 'sparks' in text.lower():
+        return 'Sparks, NV'
+    return text
+
+
+def _load_store_index(user_id):
+    """The user's receipts plus a StoreIndex that places each one at a physical store."""
+    conn = sqlite3.connect('receipts.db')
+    conn.row_factory = sqlite3.Row
+    try:
+        expenses = [dict(r) for r in conn.execute(
+            'SELECT id, merchant_name, address, location, amount, date FROM expenses WHERE user_id = ?', (user_id,))]
+        locations = [dict(r) for r in conn.execute(
+            'SELECT id, name, address, store_codes FROM locations WHERE user_id = ?', (user_id,))]
+    finally:
+        conn.close()
+    return StoreIndex(locations, expenses), expenses
+
+
+def _trend_from_rows(pairs, start, end):
     """Spend per day (up to ~5 weeks), per month, or per year (beyond 3 years), zero-filled so gaps are visible.
 
-    Every receipt in the period lands in exactly one bucket, so the columns always add up to the headline total.
+    ``pairs`` are (iso_date, amount). Every receipt lands in exactly one bucket, so the columns always add up to
+    the headline total.
     """
-    where, params = ['user_id = ?'], [user_id]
-    if store_key is not None:
-        where.append('LOWER(TRIM(merchant_name)) = ?')
-        params.append(store_key)
-    if start is not None:
-        where.append('date >= ?')
-        params.append(start.isoformat())
-    if end is not None:
-        where.append('date <= ?')
-        params.append(end.isoformat())
+    dated = [(_parse_iso_date(d), a) for d, a in pairs]
+    dated = [(d, a) for d, a in dated if d]
     if start is None or end is None:                   # open-ended: use the receipts' own first / last dates
-        cursor.execute(f"SELECT MIN(date), MAX(date) FROM expenses WHERE {' AND '.join(where)}", params)
-        first, last = (_parse_iso_date(v) for v in cursor.fetchone())
-        if not first:
+        if not dated:
             return 'month', []
-        start, end = start or first, end or last
+        start, end = start or min(d for d, _ in dated), end or max(d for d, _ in dated)
 
     span = (end - start).days
     bucket = 'day' if span <= 35 else 'year' if span > 36 * 31 else 'month'
-    fmt = {'day': '%Y-%m-%d', 'month': '%Y-%m', 'year': '%Y'}[bucket]
-    cursor.execute(f"SELECT strftime('{fmt}', date), SUM(amount) FROM expenses WHERE {' AND '.join(where)} GROUP BY 1", params)
-    totals = {k: v for k, v in cursor.fetchall()}
+    key_of = {'day': lambda d: d.isoformat(), 'month': lambda d: d.strftime('%Y-%m'), 'year': lambda d: str(d.year)}[bucket]
+    totals = defaultdict(float)
+    for d, amount in dated:
+        totals[key_of(d)] += amount or 0
 
     buckets = []
     if bucket == 'day':
@@ -1840,7 +1837,7 @@ def _trend_buckets(cursor, user_id, start, end, store_key):
         for year in range(start.year, end.year + 1):
             buckets.append({'key': str(year), 'label': str(year), 'full': str(year)})
     for b in buckets:
-        b['total'] = round(totals.get(b['key'], 0) or 0, 2)
+        b['total'] = round(totals.get(b['key'], 0), 2)
 
     top = max((b['total'] for b in buckets), default=0)
     step = 1 if len(buckets) <= 12 else (5 if bucket == 'day' else 3)
@@ -1850,78 +1847,174 @@ def _trend_buckets(cursor, user_id, start, end, store_key):
     return bucket, buckets
 
 
+def _group_rows(entries, field, total_override=None):
+    """[(name, total, count, last_date)] for receipts grouped on ``field`` (case-insensitive), biggest first."""
+    groups = {}
+    for e in entries:
+        g = groups.setdefault(e[field].strip().lower(), {'name': e[field].strip(), 'total': 0.0, 'count': 0, 'last': ''})
+        g['total'] += e['amount'] or 0
+        g['count'] += 1
+        g['last'] = max(g['last'], e['date'] or '')
+    return sorted(groups.values(), key=lambda g: (-g['total'], g['name'].lower()))
+
+
+def _filter_by_store(index, rows, store=None, brand=None, merchant_key='merchant_name', address_key='address'):
+    """Keep only the receipts that resolve to a store / brand (used by the expenses list and the exports)."""
+    if not store and not brand:
+        return rows
+    store, brand = (store or '').strip().lower(), (brand or '').strip().lower()
+    kept = []
+    for row in rows:
+        resolved = index.resolve(row[merchant_key], row[address_key])
+        if (not store or resolved['store'].lower() == store) and (not brand or resolved['brand'].lower() == brand):
+            kept.append(row)
+    return kept
+
+
 @app.route('/spending')
 @login_required
 def spending():
-    """How much has been spent at each store (or in each city), for a chosen period."""
+    """How much has been spent at each store (or brand, or city), for a chosen period."""
     period, period_label, start, end = spending_range(
         request.args.get('period'), request.args.get('start_date'), request.args.get('end_date'))
-    group = 'city' if request.args.get('group') == 'city' else 'store'
-    store = (request.args.get('store') or '').strip() if group == 'store' else ''
-    store_key = store.lower() if store else None
+    group = request.args.get('group') if request.args.get('group') in ('store', 'brand', 'city') else 'store'
+    chosen = (request.args.get('store') or '').strip() if group != 'city' else ''
 
-    conn = sqlite3.connect('receipts.db')
-    cursor = conn.cursor()
-    try:
-        where, params = ['user_id = ?'], [current_user.id]
-        if start:
-            where.append('date >= ?'); params.append(start.isoformat())
-        if end:
-            where.append('date <= ?'); params.append(end.isoformat())
-        base_where = ' AND '.join(where)
+    index, everything = _load_store_index(current_user.id)
+    start_iso, end_iso = (start.isoformat() if start else None), (end.isoformat() if end else None)
+    entries = []
+    for e in everything:
+        if (start_iso and (e['date'] or '') < start_iso) or (end_iso and (e['date'] or '') > end_iso):
+            continue
+        resolved = index.resolve(e['merchant_name'], e['address'])
+        entries.append({**e, 'store': resolved['store'], 'brand': resolved['brand'], 'placed': resolved['placed'],
+                        'city': _city_of(e['location'])})
 
-        label_sql, key_sql = ('TRIM(merchant_name)', 'LOWER(TRIM(merchant_name))') if group == 'store' else (CITY_SQL, CITY_SQL)
-        cursor.execute(f"""
-            SELECT MIN({label_sql}) AS name, SUM(amount), COUNT(*), MAX(date)
-            FROM expenses WHERE {base_where}
-            GROUP BY {key_sql}
-            ORDER BY SUM(amount) DESC, name COLLATE NOCASE ASC
-        """, params)
-        raw = cursor.fetchall()
+    link_args = {'period': period, 'group': group}
+    if period == 'custom':
+        link_args.update(start_date=start_iso or '', end_date=end_iso or '')
 
-        grand_total = sum(r[1] or 0 for r in raw)
-        grand_count = sum(r[2] for r in raw)
-        top = max((r[1] or 0 for r in raw), default=0)
-        link_args = {'period': period, 'group': group}
-        if period == 'custom':
-            link_args.update(start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else '')
-        rows = []
-        for name, total, count, last_date in raw:
-            total = round(total or 0, 2)
-            rows.append({
-                'name': name, 'total': total, 'count': count, 'avg': round(total / count, 2) if count else 0,
-                'share': round(total / grand_total * 100, 1) if grand_total else 0,
-                'ratio': (total / top) if top else 0, 'last_date': last_date,
-                'href': url_for('spending', **{**link_args, 'store': name}) if group == 'store' else None,
-                'receipts_href': url_for('view_expenses', location=name,
-                                         start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else ''),
-            })
+    grand_total = sum(e['amount'] or 0 for e in entries)
+    top = max((g['total'] for g in _group_rows(entries, group)), default=0)
 
-        selected, recent = None, []
-        if store_key is not None:
-            selected = next((r for r in rows if r['name'].lower() == store_key), None) or {
-                'name': store, 'total': 0, 'count': 0, 'avg': 0, 'share': 0, 'ratio': 0, 'last_date': None,
-                'receipts_href': url_for('view_expenses', location=store)}
-            cursor.execute(f"""
-                SELECT id, date, amount, merchant_name FROM expenses
-                WHERE {base_where} AND LOWER(TRIM(merchant_name)) = ?
-                ORDER BY date DESC, id DESC LIMIT 15
-            """, params + [store_key])
-            recent = [{'id': r[0], 'date': r[1], 'amount': r[2], 'merchant': r[3]} for r in cursor.fetchall()]
+    def row_for(g, field, share_of, ratio_of, href_group=None):
+        return {
+            'name': g['name'], 'total': round(g['total'], 2), 'count': g['count'],
+            'avg': round(g['total'] / g['count'], 2) if g['count'] else 0,
+            'share': round(g['total'] / share_of * 100, 1) if share_of else 0,
+            'ratio': (g['total'] / ratio_of) if ratio_of else 0, 'last_date': g['last'],
+            'href': url_for('spending', **{**link_args, 'group': href_group, 'store': g['name']}) if href_group else None,
+            'receipts_href': url_for('view_expenses', **({'brand': g['name']} if field == 'brand' else {'store': g['name']}
+                                     if field == 'store' else {'location': g['name']}),
+                                     start_date=start_iso or '', end_date=end_iso or ''),
+        }
 
-        bucket, trend = _trend_buckets(cursor, current_user.id, start, end, store_key)
-    finally:
-        conn.close()
+    rows = [row_for(g, group, grand_total, top, href_group=group if group != 'city' else None)
+            for g in _group_rows(entries, group)]
+
+    selected, recent, children = None, [], []
+    scope = entries
+    if chosen:
+        scope = [e for e in entries if e[group].strip().lower() == chosen.lower()]
+        selected = next((r for r in rows if r['name'].lower() == chosen.lower()), None) or {
+            'name': chosen, 'total': 0, 'count': 0, 'avg': 0, 'share': 0, 'ratio': 0, 'last_date': None,
+            'receipts_href': url_for('view_expenses', **({'brand': chosen} if group == 'brand' else {'store': chosen}))}
+        recent = [{'id': e['id'], 'date': e['date'], 'amount': e['amount'], 'merchant': e['merchant_name'],
+                   'store': e['store']}
+                  for e in sorted(scope, key=lambda e: (e['date'] or '', e['id']), reverse=True)[:15]]
+        if group == 'brand':                          # a brand breaks down into its stores
+            sub_rows = _group_rows(scope, 'store')
+            sub_top = max((g['total'] for g in sub_rows), default=0)
+            children = [row_for(g, 'store', selected['total'], sub_top, href_group='store') for g in sub_rows]
+
+    bucket, trend = _trend_from_rows([(e['date'], e['amount']) for e in scope], start, end)
+
+    # store numbers on receipts that no saved location claims yet (one-time assignment)
+    unassigned = []
+    if not chosen and group in ('store', 'brand'):
+        for item in index.unassigned_codes(everything)[:5]:
+            item['locations'] = [{'id': l['id'], 'name': l['name']} for l in index.locations_of_brand(item['brand_key'])]
+            unassigned.append(item)
+    unplaced = [e for e in entries if not e['placed']]
 
     summary_total = selected['total'] if selected else round(grand_total, 2)
-    summary_count = selected['count'] if selected else grand_count
+    summary_count = selected['count'] if selected else len(entries)
     return render_template(
         'spending.html', period=period, period_label=period_label, periods=SPENDING_PERIODS, group=group,
-        start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else '',
-        rows=rows, selected=selected, recent=recent, trend=trend, bucket=bucket,
+        start_date=start_iso or '', end_date=end_iso or '',
+        rows=rows, selected=selected, recent=recent, children=children, trend=trend, bucket=bucket,
         total=summary_total, count=summary_count,
         average=round(summary_total / summary_count, 2) if summary_count else 0,
-        group_count=len(rows), link_args=link_args)
+        group_count=len(rows), link_args=link_args, unassigned=unassigned,
+        unplaced_count=len(unplaced), unplaced_total=round(sum(e['amount'] or 0 for e in unplaced), 2),
+        form=FlaskForm())
+
+
+def _parse_store_codes(text):
+    """'e203, E0205 #2028' -> (['E0203', 'E0205', '2028'], ['junk', ...])."""
+    good, bad = [], []
+    for token in re.split(r'[,;\s]+', text or ''):
+        if not token.strip():
+            continue
+        code = normalize_code(token)
+        if code and code not in good:
+            good.append(code)
+        elif not code:
+            bad.append(token)
+    return good, bad
+
+
+def _add_codes_to_location(conn, user_id, location_id, new_codes, replace=False):
+    row = conn.execute('SELECT store_codes FROM locations WHERE id = ? AND user_id = ?', (location_id, user_id)).fetchone()
+    if row is None:
+        return False
+    existing = [] if replace else _parse_store_codes(row[0])[0]
+    merged = existing + [c for c in new_codes if c not in existing]
+    conn.execute('UPDATE locations SET store_codes = ? WHERE id = ? AND user_id = ?', (','.join(merged), location_id, user_id))
+    return True
+
+
+@app.route('/locations/<int:location_id>/codes', methods=['POST'])
+@login_required
+def set_location_codes(location_id):
+    """Replace a location's store numbers (the numbers receipts print for it, e.g. E0205)."""
+    codes, bad = _parse_store_codes(request.form.get('store_codes'))
+    conn = sqlite3.connect('receipts.db')
+    try:
+        ok = _add_codes_to_location(conn, current_user.id, location_id, codes, replace=True)
+        conn.commit()
+    finally:
+        conn.close()
+    if not ok:
+        flash('Location not found.', 'error')
+    else:
+        flash('Store numbers saved.' + (f' Ignored: {", ".join(bad)}.' if bad else ''), 'warning' if bad else 'success')
+    return redirect(url_for('locations_page'))
+
+
+@app.route('/locations/assign_code', methods=['POST'])
+@login_required
+def assign_store_code():
+    """From the spending page: 'receipts numbered E0205 belong to this saved location'."""
+    code = normalize_code(request.form.get('code'))
+    try:
+        location_id = int(request.form.get('location_id', ''))
+    except ValueError:
+        location_id = None
+    back = request.form.get('next') or ''
+    back = back if back.startswith('/spending') else url_for('spending')
+    if not (FlaskForm().validate_on_submit() and code and location_id):
+        flash('Could not save that store number.', 'error')
+        return redirect(back)
+    conn = sqlite3.connect('receipts.db')
+    try:
+        ok = _add_codes_to_location(conn, current_user.id, location_id, [code])
+        name = conn.execute('SELECT name FROM locations WHERE id = ? AND user_id = ?', (location_id, current_user.id)).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    flash(f'#{code} now counts as {name[0]}.' if ok and name else 'Location not found.', 'success' if ok else 'error')
+    return redirect(back)
 
 
 @app.route('/expenses')
@@ -1936,6 +2029,8 @@ def view_expenses():
     end_date = request.args.get('end_date', '')
     location_filter = request.args.get('location', '')
     search_query = request.args.get('q', '')
+    store_filter = request.args.get('store', '').strip()
+    brand_filter = request.args.get('brand', '').strip()
     sort_by = request.args.get('sort', 'date_desc')  # Default sort
     
     conn = sqlite3.connect('receipts.db')
@@ -2000,6 +2095,10 @@ def view_expenses():
     
     cursor.execute(query, params)
     expenses = cursor.fetchall()
+    if store_filter or brand_filter:                 # exact store / brand, placed the same way as the spending page
+        index, _ = _load_store_index(current_user.id)
+        expenses = [r for r in expenses if _filter_by_store(
+            index, [{'merchant_name': r[1], 'address': r[12]}], store_filter, brand_filter)]
     
     # Get available years and months for filters (current user only)
     cursor.execute('SELECT DISTINCT strftime("%Y", date) FROM expenses WHERE user_id = ? ORDER BY date DESC', (current_user.id,))
@@ -2035,7 +2134,9 @@ def view_expenses():
                          current_end_date=end_date,
                          current_location=location_filter,
                          current_sort=sort_by,
-                         current_search=search_query)
+                         current_search=search_query,
+                         current_store=store_filter,
+                         current_brand=brand_filter)
 
 @app.route('/export/<format>')
 @login_required
@@ -2048,6 +2149,8 @@ def export_expenses(format):
     end_date = request.args.get('end_date')
     location = request.args.get('location')
     search_query = request.args.get('q')
+    store_filter = (request.args.get('store') or '').strip()
+    brand_filter = (request.args.get('brand') or '').strip()
     
     conn = sqlite3.connect('receipts.db')
     
@@ -2092,6 +2195,11 @@ def export_expenses(format):
     # Load data into pandas DataFrame
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
+    if (store_filter or brand_filter) and not df.empty:
+        index, _ = _load_store_index(current_user.id)
+        keep = [bool(_filter_by_store(index, [{'merchant_name': m, 'address': a}], store_filter, brand_filter))
+                for m, a in zip(df['merchant_name'], df['address'])]
+        df = df[keep]
     
     if df.empty:
         flash('No expenses found for the selected criteria.', 'warning')

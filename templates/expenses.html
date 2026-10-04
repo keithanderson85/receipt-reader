@@ -8,12 +8,12 @@
 {% set active = {
     'q': current_search or '', 'category': current_category or '', 'location': current_location or '',
     'month': current_month or '', 'start_date': current_start_date or '', 'end_date': current_end_date or '',
-    'year': current_year or '', 'sort': current_sort
+    'year': current_year or '', 'sort': current_sort, 'store': current_store or '', 'brand': current_brand or ''
 } %}
-{% set sheet_filters = [current_category, current_location, current_month, current_start_date, current_end_date] | select | list | length %}
+{% set sheet_filters = [current_category, current_location, current_month, current_start_date, current_end_date, current_store, current_brand] | select | list | length %}
 {% set export_args = {
     'year': current_year, 'category': current_category, 'month': current_month, 'start_date': current_start_date,
-    'end_date': current_end_date, 'location': current_location, 'q': current_search
+    'end_date': current_end_date, 'location': current_location, 'q': current_search, 'store': current_store, 'brand': current_brand
 } %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -55,6 +55,8 @@
 {% if sheet_filters or current_search %}
 <div class="d-flex flex-wrap gap-2 mb-2">
     {% if current_search %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, q='')) }}">“{{ current_search }}” <i class="bi bi-x"></i></a>{% endif %}
+    {% if current_store %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, store='')) }}">Store: {{ current_store }} <i class="bi bi-x"></i></a>{% endif %}
+    {% if current_brand %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, brand='')) }}">Brand: {{ current_brand }} <i class="bi bi-x"></i></a>{% endif %}
     {% if current_category %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, category='')) }}">{{ cat_short.get(current_category, current_category) }} <i class="bi bi-x"></i></a>{% endif %}
     {% if current_location %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, location='')) }}">{{ current_location }} <i class="bi bi-x"></i></a>{% endif %}
     {% if current_month %}<a class="chip chip-remove" href="{{ url_for('view_expenses', **dict(active, month='')) }}">{{ month_names[current_month|int - 1][1] }} <i class="bi bi-x"></i></a>{% endif %}

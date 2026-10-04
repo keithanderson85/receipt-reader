@@ -124,6 +124,18 @@ def add_expense(A):
 
 
 @pytest.fixture
+def add_location(A):
+    def _add(name, address, user_id=1, codes='', category=None):
+        con = sqlite3.connect('receipts.db')
+        cur = con.execute('INSERT INTO locations (user_id, name, address, category, store_codes) VALUES (?, ?, ?, ?, ?)',
+                          (user_id, name, address, category, codes))
+        con.commit()
+        con.close()
+        return cur.lastrowid
+    return _add
+
+
+@pytest.fixture
 def db():
     def _q(sql, *args):
         con = sqlite3.connect('receipts.db')
