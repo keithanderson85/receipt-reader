@@ -1735,6 +1735,195 @@ def save_expense():
     flash('Error saving expense. Please check the form.', 'error')
     return redirect(url_for('index'))
 
+# ---- spending by store / city ---------------------------------------------------------------------
+
+SPENDING_PERIODS = [('this_month', 'This month'), ('last_month', 'Last month'), ('last_30', 'Last 30 days'),
+                    ('this_year', 'This year'), ('last_year', 'Last year'), ('all', 'All time')]
+DEFAULT_SPENDING_PERIOD = 'this_year'
+CITY_SQL = (
+    "CASE WHEN location LIKE '%Reno%' THEN 'Reno, NV' WHEN location LIKE '%Sparks%' THEN 'Sparks, NV' "
+    "WHEN location IS NULL OR TRIM(location) = '' THEN 'Unknown' ELSE TRIM(location) END"
+)
+
+
+def _month_start(d):
+    return d.replace(day=1)
+
+
+def _month_end(d):
+    return (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+
+def _parse_iso_date(value):
+    try:
+        return datetime.strptime((value or '').strip(), '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def spending_range(period, start_raw=None, end_raw=None, today=None):
+    """Resolve a period choice to (key, label, start, end); start/end are dates or None (open ended)."""
+    today = today or datetime.now().date()
+    if period == 'custom':
+        start, end = _parse_iso_date(start_raw), _parse_iso_date(end_raw)
+        if start and end and start > end:
+            start, end = end, start
+        if start or end:
+            fmt = lambda d: f"{d:%b} {d.day}, {d.year}"
+            label = f"{fmt(start) if start else 'the beginning'} to {fmt(end) if end else 'today'}"
+            return 'custom', label, start, end
+        period = DEFAULT_SPENDING_PERIOD
+    if period not in dict(SPENDING_PERIODS):
+        period = DEFAULT_SPENDING_PERIOD
+
+    label = dict(SPENDING_PERIODS)[period]
+    if period == 'this_month':
+        return period, label, _month_start(today), _month_end(today)
+    if period == 'last_month':
+        last = _month_start(today) - timedelta(days=1)
+        return period, label, _month_start(last), last
+    if period == 'last_30':
+        return period, label, today - timedelta(days=29), today
+    if period == 'this_year':
+        return period, label, today.replace(month=1, day=1), today.replace(month=12, day=31)
+    if period == 'last_year':
+        return period, label, datetime(today.year - 1, 1, 1).date(), datetime(today.year - 1, 12, 31).date()
+    return 'all', label, None, None
+
+
+def _month_iter(start, end):
+    d = _month_start(start)
+    while d <= end:
+        yield d
+        d = (d + timedelta(days=32)).replace(day=1)
+
+
+def _trend_buckets(cursor, user_id, start, end, store_key):
+    """Spend per day (up to ~5 weeks), per month, or per year (beyond 3 years), zero-filled so gaps are visible.
+
+    Every receipt in the period lands in exactly one bucket, so the columns always add up to the headline total.
+    """
+    where, params = ['user_id = ?'], [user_id]
+    if store_key is not None:
+        where.append('LOWER(TRIM(merchant_name)) = ?')
+        params.append(store_key)
+    if start is not None:
+        where.append('date >= ?')
+        params.append(start.isoformat())
+    if end is not None:
+        where.append('date <= ?')
+        params.append(end.isoformat())
+    if start is None or end is None:                   # open-ended: use the receipts' own first / last dates
+        cursor.execute(f"SELECT MIN(date), MAX(date) FROM expenses WHERE {' AND '.join(where)}", params)
+        first, last = (_parse_iso_date(v) for v in cursor.fetchone())
+        if not first:
+            return 'month', []
+        start, end = start or first, end or last
+
+    span = (end - start).days
+    bucket = 'day' if span <= 35 else 'year' if span > 36 * 31 else 'month'
+    fmt = {'day': '%Y-%m-%d', 'month': '%Y-%m', 'year': '%Y'}[bucket]
+    cursor.execute(f"SELECT strftime('{fmt}', date), SUM(amount) FROM expenses WHERE {' AND '.join(where)} GROUP BY 1", params)
+    totals = {k: v for k, v in cursor.fetchall()}
+
+    buckets = []
+    if bucket == 'day':
+        for i in range(span + 1):
+            d = start + timedelta(days=i)
+            buckets.append({'key': d.isoformat(), 'label': str(d.day), 'full': d.strftime('%b ') + str(d.day)})
+    elif bucket == 'month':
+        months = list(_month_iter(start, end))
+        for d in months:
+            label = d.strftime("%b '%y") if len(months) > 12 else d.strftime('%b')
+            buckets.append({'key': d.strftime('%Y-%m'), 'label': label, 'full': d.strftime('%B %Y')})
+    else:
+        for year in range(start.year, end.year + 1):
+            buckets.append({'key': str(year), 'label': str(year), 'full': str(year)})
+    for b in buckets:
+        b['total'] = round(totals.get(b['key'], 0) or 0, 2)
+
+    top = max((b['total'] for b in buckets), default=0)
+    step = 1 if len(buckets) <= 12 else (5 if bucket == 'day' else 3)
+    for i, b in enumerate(buckets):
+        b['ratio'] = (b['total'] / top) if top else 0
+        b['show_label'] = i % step == 0 or (bucket != 'day' and i == len(buckets) - 1)
+    return bucket, buckets
+
+
+@app.route('/spending')
+@login_required
+def spending():
+    """How much has been spent at each store (or in each city), for a chosen period."""
+    period, period_label, start, end = spending_range(
+        request.args.get('period'), request.args.get('start_date'), request.args.get('end_date'))
+    group = 'city' if request.args.get('group') == 'city' else 'store'
+    store = (request.args.get('store') or '').strip() if group == 'store' else ''
+    store_key = store.lower() if store else None
+
+    conn = sqlite3.connect('receipts.db')
+    cursor = conn.cursor()
+    try:
+        where, params = ['user_id = ?'], [current_user.id]
+        if start:
+            where.append('date >= ?'); params.append(start.isoformat())
+        if end:
+            where.append('date <= ?'); params.append(end.isoformat())
+        base_where = ' AND '.join(where)
+
+        label_sql, key_sql = ('TRIM(merchant_name)', 'LOWER(TRIM(merchant_name))') if group == 'store' else (CITY_SQL, CITY_SQL)
+        cursor.execute(f"""
+            SELECT MIN({label_sql}) AS name, SUM(amount), COUNT(*), MAX(date)
+            FROM expenses WHERE {base_where}
+            GROUP BY {key_sql}
+            ORDER BY SUM(amount) DESC, name COLLATE NOCASE ASC
+        """, params)
+        raw = cursor.fetchall()
+
+        grand_total = sum(r[1] or 0 for r in raw)
+        grand_count = sum(r[2] for r in raw)
+        top = max((r[1] or 0 for r in raw), default=0)
+        link_args = {'period': period, 'group': group}
+        if period == 'custom':
+            link_args.update(start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else '')
+        rows = []
+        for name, total, count, last_date in raw:
+            total = round(total or 0, 2)
+            rows.append({
+                'name': name, 'total': total, 'count': count, 'avg': round(total / count, 2) if count else 0,
+                'share': round(total / grand_total * 100, 1) if grand_total else 0,
+                'ratio': (total / top) if top else 0, 'last_date': last_date,
+                'href': url_for('spending', **{**link_args, 'store': name}) if group == 'store' else None,
+                'receipts_href': url_for('view_expenses', location=name,
+                                         start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else ''),
+            })
+
+        selected, recent = None, []
+        if store_key is not None:
+            selected = next((r for r in rows if r['name'].lower() == store_key), None) or {
+                'name': store, 'total': 0, 'count': 0, 'avg': 0, 'share': 0, 'ratio': 0, 'last_date': None,
+                'receipts_href': url_for('view_expenses', location=store)}
+            cursor.execute(f"""
+                SELECT id, date, amount, merchant_name FROM expenses
+                WHERE {base_where} AND LOWER(TRIM(merchant_name)) = ?
+                ORDER BY date DESC, id DESC LIMIT 15
+            """, params + [store_key])
+            recent = [{'id': r[0], 'date': r[1], 'amount': r[2], 'merchant': r[3]} for r in cursor.fetchall()]
+
+        bucket, trend = _trend_buckets(cursor, current_user.id, start, end, store_key)
+    finally:
+        conn.close()
+
+    summary_total = selected['total'] if selected else round(grand_total, 2)
+    summary_count = selected['count'] if selected else grand_count
+    return render_template(
+        'spending.html', period=period, period_label=period_label, periods=SPENDING_PERIODS, group=group,
+        start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else '',
+        rows=rows, selected=selected, recent=recent, trend=trend, bucket=bucket,
+        total=summary_total, count=summary_count,
+        average=round(summary_total / summary_count, 2) if summary_count else 0,
+        group_count=len(rows), link_args=link_args)
+
+
 @app.route('/expenses')
 @login_required
 def view_expenses():

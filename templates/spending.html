@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}Spending - Receipt Reader{% endblock %}
+
+{% macro money(v) %}${{ "{:,.2f}".format(v or 0) }}{% endmacro %}
+
+{% block content %}
+{% set store = selected.name if selected else '' %}
+{% set nav_args = {'group': group, 'store': store} if store else {'group': group} %}
+{% set chart_rows = rows[:15] %}
+
+<div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+    <div style="min-width:0;">
+        {% if selected %}
+        <a href="{{ url_for('spending', period=period, group=group, start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}" class="small text-decoration-none"><i class="bi bi-arrow-left"></i> All stores</a>
+        <h1 class="h3 fw-bold mb-0" style="letter-spacing:-.03em; overflow-wrap:anywhere;">{{ selected.name }}</h1>
+        {% else %}
+        <h1 class="h3 fw-bold mb-0" style="letter-spacing:-.03em;">Spending</h1>
+        {% endif %}
+        <div class="text-secondary small">{{ period_label }}</div>
+    </div>
+    <div class="btn-group btn-group-sm viz-view flex-shrink-0" role="group" aria-label="Chart or table" style="white-space:nowrap;">
+        <button type="button" class="btn btn-outline-secondary active" data-view="chart" aria-pressed="true"><i class="bi bi-bar-chart-fill"></i> Chart</button>
+        <button type="button" class="btn btn-outline-secondary" data-view="table" aria-pressed="false"><i class="bi bi-table"></i> Table</button>
+    </div>
+</div>
+
+<!-- Filters: one row, above everything they scope -->
+<div class="chip-scroll mb-2">
+    {% for key, label in periods %}
+    <a class="chip {% if key == period %}active{% endif %}" href="{{ url_for('spending', period=key, **nav_args) }}">{{ label }}</a>
+    {% endfor %}
+    <a class="chip {% if period == 'custom' %}active{% endif %}" href="#customRange" data-bs-toggle="collapse" role="button" aria-expanded="{{ 'true' if period == 'custom' else 'false' }}">Custom…</a>
+</div>
+<div class="collapse {% if period == 'custom' %}show{% endif %} mb-3" id="customRange">
+    <form method="get" action="{{ url_for('spending') }}" class="d-flex flex-wrap gap-2 align-items-end">
+        <input type="hidden" name="period" value="custom">
+        <input type="hidden" name="group" value="{{ group }}">
+        {% if store %}<input type="hidden" name="store" value="{{ store }}">{% endif %}
+        <div><label class="form-label small mb-1" for="sp_from">From</label><input type="date" id="sp_from" name="start_date" class="form-control" value="{{ start_date if period == 'custom' else '' }}"></div>
+        <div><label class="form-label small mb-1" for="sp_to">To</label><input type="date" id="sp_to" name="end_date" class="form-control" value="{{ end_date if period == 'custom' else '' }}"></div>
+        <button class="btn btn-primary">Apply</button>
+    </form>
+</div>
+{% if not selected %}
+<div class="btn-group btn-group-sm mb-4" role="group" aria-label="Group by">
+    <a class="btn btn-outline-secondary {% if group == 'store' %}active{% endif %}" href="{{ url_for('spending', period=period, group='store', start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}">By store</a>
+    <a class="btn btn-outline-secondary {% if group == 'city' %}active{% endif %}" href="{{ url_for('spending', period=period, group='city', start_date=start_date if period == 'custom' else None, end_date=end_date if period == 'custom' else None) }}">By city</a>
+</div>
+{% endif %}
+
+<!-- The headline number -->
+<div class="mb-4">
+    <div class="viz-eyebrow">{% if selected %}Spent at {{ selected.name }}{% else %}Total spent{% endif %}</div>
+    <div class="hero-figure">{{ money(total) }}</div>
+    <div class="row g-2 mt-2">
+        <div class="col-4"><div class="stat-tile"><div class="label">Receipts</div><div class="value">{{ count }}</div></div></div>
+        <div class="col-4"><div class="stat-tile"><div class="label">Average</div><div class="value">{{ money(average) }}</div></div></div>
+        <div class="col-4"><div class="stat-tile"><div class="label">{% if selected %}Share{% elif group == 'city' %}Cities{% else %}Stores{% endif %}</div>
+            <div class="value">{% if selected %}{{ '%.0f'|format(selected.share) }}%{% else %}{{ group_count }}{% endif %}</div></div></div>
+    </div>
+</div>
+
+{% if not rows and not selected %}
+<div class="card"><div class="empty-state">
+    <i class="bi bi-bar-chart"></i>
+    <h5>No spending in this period</h5>
+    <p class="mb-0">Try a longer period, or scan a receipt to get started.</p>
+</div></div>
+{% else %}
+
+{% if not selected %}
+<!-- Ranked totals -->
+<section class="viz-card mb-4" aria-labelledby="byGroupTitle">
+    <h2 class="viz-title" id="byGroupTitle">Spending by {{ 'city' if group == 'city' else 'store' }}</h2>
+    <div class="viz-subtitle">{{ period_label }}{% if rows|length > chart_rows|length %} · top {{ chart_rows|length }} of {{ rows|length }} - use Table for all{% endif %}</div>
+
+    <div class="viz-chart" data-viz="chart">
+        {% for r in chart_rows %}
+        {% set tag = 'a' if r.href else 'div' %}
+        <{{ tag }} class="hbar-row" {% if r.href %}href="{{ r.href }}"{% endif %} tabindex="0" data-tip
+            data-name="{{ r.name }}" data-value="{{ money(r.total) }}"
+            data-detail="{{ r.count }} receipt{{ '' if r.count == 1 else 's' }} · {{ money(r.avg) }} avg · {{ '%.1f'|format(r.share) }}% of total">
+            <span class="hbar-label">{{ r.name }}</span>
+            <span class="hbar-track">
+                <span class="hbar" style="--p: {{ '%.4f'|format(r.ratio) }};"></span>
+                <span class="hbar-value">{{ money(r.total) }}</span>
+            </span>
+        </{{ tag }}>
+        {% endfor %}
+    </div>
+
+    <div class="viz-table" data-viz="table" hidden>
+        <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>{{ 'City' if group == 'city' else 'Store' }}</th><th class="text-end">Total</th><th class="text-end">Receipts</th><th class="text-end d-none d-sm-table-cell">Average</th><th class="text-end">Share</th><th class="d-none d-md-table-cell">Last receipt</th></tr></thead>
+            <tbody>
+            {% for r in rows %}
+            <tr>
+                <td>{% if r.href %}<a href="{{ r.href }}" class="text-decoration-none">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
+                <td class="text-end fw-semibold">{{ money(r.total) }}</td>
+                <td class="text-end">{{ r.count }}</td>
+                <td class="text-end d-none d-sm-table-cell">{{ money(r.avg) }}</td>
+                <td class="text-end">{{ '%.1f'|format(r.share) }}%</td>
+                <td class="d-none d-md-table-cell text-secondary">{{ r.last_date }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<!-- Over time -->
+{% if trend %}
+{% set peak = trend | sort(attribute='total') | last %}
+<section class="viz-card mb-4" aria-labelledby="overTimeTitle">
+    <h2 class="viz-title" id="overTimeTitle">{% if selected %}{{ selected.name }} over time{% else %}Spending over time{% endif %}</h2>
+    <div class="viz-subtitle">{{ {'day': 'Per day', 'month': 'Per month', 'year': 'Per year'}[bucket] }} · {{ period_label }}</div>
+
+    <div class="viz-chart" data-viz="chart">
+        <div class="columns" role="img" aria-label="Columns of spending per {{ bucket }}; busiest: {{ peak.full }}, {{ money(peak.total) }}">
+            {% for b in trend %}
+            <div class="col-slot" tabindex="0" data-tip data-name="{{ b.full }}" data-value="{{ money(b.total) }}" data-detail="">
+                <div class="col-plot" style="--p: {{ '%.4f'|format(b.ratio) }};">
+                    {% if b.total and b.key == peak.key %}<span class="col-cap">{{ money(b.total) }}</span>{% endif %}
+                    <span class="col-bar"{% if b.total %} style="min-height: 2px;"{% endif %}></span>
+                </div>
+                <div class="col-axis">{% if b.show_label %}{{ b.label }}{% endif %}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="viz-table" data-viz="table" hidden>
+        <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead><tr><th>{{ {'day': 'Day', 'month': 'Month', 'year': 'Year'}[bucket] }}</th><th class="text-end">Total</th></tr></thead>
+            <tbody>{% for b in trend if b.total %}<tr><td>{{ b.full }}</td><td class="text-end">{{ money(b.total) }}</td></tr>{% endfor %}</tbody>
+        </table>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+{% if selected %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <h2 class="section-title mb-0">Latest receipts</h2>
+    <a href="{{ selected.receipts_href }}" class="small fw-semibold text-decoration-none">View all receipts</a>
+</div>
+{% if recent %}
+<div class="row-list mb-4">
+    {% for r in recent %}
+    <a href="{{ url_for('edit_expense', expense_id=r.id) }}" class="row-item">
+        <span class="row-main"><div class="row-title">{{ r.date }}</div></span>
+        <span class="row-amount">{{ money(r.amount) }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card mb-4"><div class="empty-state"><p class="mb-0">No receipts from {{ selected.name }} in this period.</p></div></div>
+{% endif %}
+{% endif %}
+
+{% endif %}
+
+<div id="vizTip" class="viz-tooltip" role="tooltip" hidden></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // ---- chart / table view (the table is the accessible twin of every chart) ----
+    const buttons = document.querySelectorAll('.viz-view [data-view]');
+    function setView(view) {
+        document.querySelectorAll('[data-viz="chart"]').forEach(e => e.hidden = view !== 'chart');
+        document.querySelectorAll('[data-viz="table"]').forEach(e => e.hidden = view !== 'table');
+        buttons.forEach(b => { const on = b.dataset.view === view; b.classList.toggle('active', on); b.setAttribute('aria-pressed', on); });
+        try { localStorage.setItem('spendView', view); } catch (e) {}
+    }
+    buttons.forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+    let saved = 'chart';
+    try { saved = localStorage.getItem('spendView') || 'chart'; } catch (e) {}
+    if (saved === 'table') setView('table');
+
+    // ---- tooltip: one per page, same content on hover and keyboard focus ----
+    const tip = document.getElementById('vizTip');
+    function show(target, x, y) {
+        tip.replaceChildren();
+        const value = document.createElement('div'); value.className = 'tip-value'; value.textContent = target.dataset.value;
+        const name = document.createElement('div'); name.className = 'tip-name'; name.textContent = target.dataset.name;
+        tip.append(value, name);
+        if (target.dataset.detail) {
+            const detail = document.createElement('div'); detail.className = 'tip-detail'; detail.textContent = target.dataset.detail;
+            tip.append(detail);
+        }
+        tip.hidden = false;
+        const r = target.getBoundingClientRect();
+        const px = x === undefined ? r.left + r.width / 2 : x, py = y === undefined ? r.top : y;
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, px - w / 2)) + 'px';
+        tip.style.top = (py - h - 12 < 8 ? py + 18 : py - h - 12) + 'px';
+    }
+    const hide = () => { tip.hidden = true; };
+    document.querySelectorAll('[data-tip]').forEach(el => {
+        el.addEventListener('pointerenter', e => show(el, e.clientX, e.clientY));
+        el.addEventListener('pointermove', e => show(el, e.clientX, e.clientY));
+        el.addEventListener('pointerleave', hide);
+        el.addEventListener('focus', () => show(el));
+        el.addEventListener('blur', hide);
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+});
+</script>
+{% endblock %}

@@ -139,7 +139,8 @@
                 {% endif %}
             </div>
             {% endfor %}
-            <div class="text-end mt-3">
+            <div class="d-flex justify-content-between mt-3">
+                <a href="{{ url_for('spending') }}" class="small fw-semibold text-decoration-none"><i class="bi bi-bar-chart-line me-1"></i>Spending by store</a>
                 <a href="{{ url_for('locations_page') }}" class="small fw-semibold text-decoration-none"><i class="bi bi-gear me-1"></i>Manage stores</a>
             </div>
         </div></div>

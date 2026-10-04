@@ -29,12 +29,11 @@
             {% if current_user.is_authenticated %}
             <nav class="top-links" aria-label="Main">
                 <a class="top-link {% if ep == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-house"></i> Dashboard</a>
-                <a class="top-link {% if ep == 'capture_page' %}active{% endif %}" href="{{ url_for('capture_page') }}"><i class="bi bi-camera"></i> New Receipt</a>
+                <a class="top-link {% if ep == 'capture_page' %}active{% endif %}" href="{{ url_for('capture_page') }}"><i class="bi bi-camera"></i> Scan</a>
                 <a class="top-link {% if ep in ('inbox', 'inbox_review') %}active{% endif %}" href="{{ url_for('inbox') }}"><i class="bi bi-inbox"></i> Inbox{% if inbox_count %} <span class="badge rounded-pill text-bg-warning">{{ inbox_count }}</span>{% endif %}</a>
                 <a class="top-link {% if ep in ('view_expenses', 'edit_expense', 'view_expense_items') %}active{% endif %}" href="{{ url_for('view_expenses') }}"><i class="bi bi-list-check"></i> Expenses</a>
-                <a class="top-link {% if ep == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt"></i> Locations</a>
-                <a class="top-link {% if ep in ('bulk_upload_page', 'bulk_upload_receipts', 'bulk_upload_resume') %}active{% endif %}" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files"></i> Bulk Upload</a>
-                <a class="top-link {% if ep == 'issue_dashboard' %}active{% endif %}" href="{{ url_for('issue_dashboard') }}"><i class="bi bi-exclamation-diamond"></i> Issues</a>
+                <a class="top-link {% if ep == 'spending' %}active{% endif %}" href="{{ url_for('spending') }}"><i class="bi bi-bar-chart-line"></i> Spending</a>
+                <a class="top-link {% if ep == 'locations_page' %}active{% endif %}" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt"></i> Stores</a>
             </nav>
             <div class="dropdown">
                 <button class="top-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-label="Account menu">
@@ -42,6 +41,9 @@
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end">
                     <li><h6 class="dropdown-header">{{ current_user.username }}</h6></li>
+                    <li><a class="dropdown-item" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files me-2"></i>Bulk upload</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('issue_dashboard') }}"><i class="bi bi-exclamation-diamond me-2"></i>Issues</a></li>
+                    <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='excel') }}"><i class="bi bi-file-earmark-excel text-success me-2"></i>Export all to Excel</a></li>
                     <li><a class="dropdown-item" href="{{ url_for('export_expenses', format='csv') }}"><i class="bi bi-file-earmark-text me-2"></i>Export all to CSV</a></li>
                     <li><hr class="dropdown-divider"></li>
@@ -84,6 +86,7 @@
         <div class="dropup">
             <button class="tab w-100" type="button" data-bs-toggle="dropdown" aria-label="More"><i class="bi bi-three-dots"></i>More</button>
             <ul class="dropdown-menu dropdown-menu-end">
+                <li><a class="dropdown-item" href="{{ url_for('spending') }}"><i class="bi bi-bar-chart-line me-2"></i>Spending by store</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('locations_page') }}"><i class="bi bi-geo-alt me-2"></i>Stores</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('bulk_upload_page') }}"><i class="bi bi-files me-2"></i>Bulk upload</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('issue_dashboard') }}"><i class="bi bi-exclamation-diamond me-2"></i>Issues</a></li>
